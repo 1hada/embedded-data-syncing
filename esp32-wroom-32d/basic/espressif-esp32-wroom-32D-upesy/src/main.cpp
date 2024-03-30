@@ -4,6 +4,9 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include "secrets.h"
+#include "hardware_constants.h"
+#include <math.h> // Include math library for 'e' ('M_E')
+
 //ADVANCED// #include <CameraLibrary.h> // Assuming this is the library for your camera
 //ADVANCED// #include <Ultrasonic.h> // Assuming this is the library for your ultrasonic sensor
 
@@ -19,10 +22,16 @@ PubSubClient mqttClient(wifiClient);
 //ADVANCED// void cameraTask2(void *parameter);
 //ADVANCED// void ultrasonicTask(void *parameter);
 void publishTask(void *parameter);
+void blinkTask(void *parameter);
+
+// LED pin
+const int LED_PIN = 2; // Built-in LED pin on ESP32-WROOM-32D
 
 void setup() {
   Serial.begin(115200);
   
+  /*
+  // start AWS
   // Connect to WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
@@ -33,12 +42,15 @@ void setup() {
 
   // Connect to AWS IoT
   mqttClient.setServer(AWS_IOT_ENDPOINT, 8883);
+  // END AWS
+  */
 
   // Create FreeRTOS tasks
   //ADVANCED// xTaskCreatePinnedToCore(cameraTask1, "Camera Task 1", 10000, NULL, 1, NULL, 0);
   //ADVANCED// xTaskCreatePinnedToCore(cameraTask2, "Camera Task 2", 10000, NULL, 1, NULL, 0);
   //ADVANCED// xTaskCreatePinnedToCore(ultrasonicTask, "Ultrasonic Task", 10000, NULL, 1, NULL, 0);
   xTaskCreatePinnedToCore(publishTask, "Publish Task", 10000, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(blinkTask, "Blink Task", 10000, NULL, 1, NULL, 0);
 }
 
 void loop() {
@@ -82,6 +94,8 @@ void ultrasonicTask(void *parameter) {
 */
 
 void publishTask(void *parameter) {
+  /*
+  // START AWS
   while (true) {
     if (!mqttClient.connected()) {
       reconnect();
@@ -92,6 +106,30 @@ void publishTask(void *parameter) {
     // Example:
     // mqttClient.publish("topic", data);
     vTaskDelay(5000 / portTICK_PERIOD_MS); // Publish every 5 seconds
+  }
+  // END AWS
+  */
+}
+
+void blinkTask(void *parameter) {
+  unsigned long previousMillis = 0;
+  unsigned long interval = 1000; // Initial blink interval (1 second)
+  
+  while (true) {
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= interval) {
+      // Blink LED
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+      
+      // Update interval based on exponential growth (e^x)
+      interval = interval * M_E;
+      if (interval > 8000) {
+        interval = 1000; // Reset interval if it exceeds 8 seconds
+      }
+      
+      previousMillis = currentMillis;
+    }
+    vTaskDelay(100 / portTICK_PERIOD_MS); // Task delay
   }
 }
 
