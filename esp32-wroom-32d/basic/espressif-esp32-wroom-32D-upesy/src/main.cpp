@@ -24,9 +24,6 @@ PubSubClient mqttClient(wifiClient);
 void publishTask(void *parameter);
 void blinkTask(void *parameter);
 
-// LED pin
-const int LED_PIN = 2; // Built-in LED pin on ESP32-WROOM-32D
-
 void setup() {
   Serial.begin(115200);
   
