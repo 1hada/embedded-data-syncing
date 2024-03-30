@@ -1,0 +1,9 @@
+#ifndef SECRETS_H
+#define SECRETS_H
+
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define AWS_IOT_ENDPOINT "YOUR_AWS_IOT_ENDPOINT"
+#define CLIENT_ID "ESP32Client"
+
+#endif
