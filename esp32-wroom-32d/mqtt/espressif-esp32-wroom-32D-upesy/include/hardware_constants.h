@@ -1,7 +1,6 @@
 #ifndef HARDWARE_CONSTANTS_H
 #define HARDWARE_CONSTANTS_H
 
-// LED pin
-const int LED_PIN = 15; // Built-in LED pin on ESP32-WROOM-32D
+// Add ESP32-WROOM-32D pins as needed
 
 #endif

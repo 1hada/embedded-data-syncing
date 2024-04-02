@@ -3,9 +3,9 @@
 #define SECRETS_H
 
 // The MQTT topics that this device should publish/subscribe
-#define AWS_IOT_PUBLISH_TOPIC   "basil-light-tracker/time/pub"
-#define AWS_IOT_SUBSCRIBE_TOPIC "basil-light-tracker/time/sub"
-#define THINGNAME "basil-light-tracker"
+#define AWS_IOT_PUBLISH_TOPIC   "topic/pub"
+#define AWS_IOT_SUBSCRIBE_TOPIC "topic/sub"
+#define THINGNAME "awesome-thing-name"
 
 const char WIFI_SSID[] = "";
 const char WIFI_PASSWORD[] = "";
