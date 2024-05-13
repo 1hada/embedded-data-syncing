@@ -7,8 +7,8 @@
 #include "secrets.h"
 #include "hardware_constants.h"
 // https://www.instructables.com/Getting-Started-With-ESP32-CAM-Streaming-Video-Usi/
-
-#define CAMERA_MODEL_AI_THINKER
+// https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/Camera/CameraWebServer/CameraWebServer.ino
+void startCameraServer();
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 
@@ -17,7 +17,6 @@
 // #define CAMERA_MODEL_M5STACK_PSRAM
 // #define CAMERA_MODEL_M5STACK_WITHOUT_PSRAM
 
-// Not tested with this model
 // #define CAMERA_MODEL_WROVER_KIT
 
 #if defined(CAMERA_MODEL_WROVER_KIT)
@@ -107,8 +106,8 @@ httpd_handle_t stream_httpd = NULL;
 
 void setup()
 {
-  // Serial.begin(115200);
-  Serial.begin(921600);
+  // Serial.begin(921600);
+  Serial.begin(115200);
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
