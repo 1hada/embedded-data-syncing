@@ -9,6 +9,7 @@
 
 const char WIFI_SSID[] = "";
 const char WIFI_PASSWORD[] = "";
+
 const char AWS_IOT_ENDPOINT[] = "xxxxx.amazonaws.com";
 
 // Amazon Root CA 1
