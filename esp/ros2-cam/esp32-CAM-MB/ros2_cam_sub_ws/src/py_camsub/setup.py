@@ -24,7 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-                'listener = py_pubsub.image_subscriber:main',
+                'listener = py_camsub.image_subscriber:main',
         ],
     },
 )
