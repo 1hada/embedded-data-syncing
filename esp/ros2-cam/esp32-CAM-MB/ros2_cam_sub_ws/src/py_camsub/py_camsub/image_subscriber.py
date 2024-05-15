@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+import cv2
 from cv_bridge import CvBridge
 """
 cd ros2_cam_sub_ws  # Navigate to your package directory
