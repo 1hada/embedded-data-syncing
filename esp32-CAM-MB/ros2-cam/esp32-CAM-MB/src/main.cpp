@@ -5,6 +5,7 @@
 #include <WiFi.h>
 
 #include "secrets.h"
+#include "hardware_constants.h"
 // https://www.instructables.com/Getting-Started-With-ESP32-CAM-Streaming-Video-Usi/
 // https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/Camera/CameraWebServer/CameraWebServer.ino
 
