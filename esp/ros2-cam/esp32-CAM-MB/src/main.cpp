@@ -2,6 +2,9 @@
 #include <esp_camera.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <ros2arduino.h>
+#include <ArduinoMDNS.h>
+
 #include <WiFi.h>
 
 #include "secrets.h"
@@ -42,11 +45,42 @@
 void startCameraServer();
 void setupLedFlash(int pin);
 
+// To Be discovered by DNS
+#define AGENT_IP "AGENT_IP_ADDRESS"
+#define AGENT_PORT 2018 // AGENT port number
+
+#define PUBLISH_FREQUENCY 2 // hz
+
+void publishString(std_msgs::String *msg, void *arg)
+{
+  (void)(arg);
+
+  static int cnt = 0;
+  sprintf(msg->data, "Hello ros2arduino %d", cnt++);
+}
+
+class StringPub : public ros2::Node
+{
+public:
+  StringPub()
+      : Node("ros2arduino_pub_node")
+  {
+    ros2::Publisher<std_msgs::String> *publisher_ = this->createPublisher<std_msgs::String>("arduino_chatter");
+    this->createWallFreq(PUBLISH_FREQUENCY, (ros2::CallbackFunc)publishString, nullptr, publisher_);
+  }
+};
+
 void setup()
 {
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
-  Serial.println();
+  if (!MDNS.begin("esp32"))
+  {
+    Serial.println("Error setting up MDNS responder!");
+    delay(10000);  // Wait for 10 seconds before restarting
+    ESP.restart(); // Restart the ESP32
+  }
+  Serial.println("MDNS responder started");
+  MDNS.addService(SERVICE_NAME, "tcp", SERVICE_PORT);
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -159,10 +193,11 @@ void setup()
 
 void loop()
 {
-  // Do nothing. Everything is done in another task by the web server
-
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.println("' to connect");
   delay(10000);
+
+  static StringPub StringNode;
+  ros2::spin(&StringNode);
 }

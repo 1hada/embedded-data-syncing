@@ -5,7 +5,6 @@
 #include <WiFi.h>
 
 #include "secrets.h"
-#include "hardware_constants.h"
 // https://www.instructables.com/Getting-Started-With-ESP32-CAM-Streaming-Video-Usi/
 // https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/Camera/CameraWebServer/CameraWebServer.ino
 
@@ -46,8 +45,6 @@ void setupLedFlash(int pin);
 void setup()
 {
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
-  Serial.println();
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -160,8 +157,6 @@ void setup()
 
 void loop()
 {
-  // Do nothing. Everything is done in another task by the web server
-
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.println("' to connect");
