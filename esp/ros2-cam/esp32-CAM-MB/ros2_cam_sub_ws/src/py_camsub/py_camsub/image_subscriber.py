@@ -6,7 +6,6 @@ from cv_bridge import CvBridge
 cd ros2_cam_sub_ws  # Navigate to your package directory
 colcon build --packages-select py_camsub    # Build the package
 source install/setup.bash  # Source the package setup script
-python3 src/py_camsub/py_camsub/image_subscriber.py  # Run the subscriber node
 
 """
 
@@ -24,7 +23,6 @@ class ImageSubscriber(Node):
     def image_callback(self, msg):
         # Convert ROS Image message to OpenCV image
         cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-
         # Process the image (e.g., display, save, or analyze)
         # Example: Display the image
         cv2.imshow('Image', cv_image)
