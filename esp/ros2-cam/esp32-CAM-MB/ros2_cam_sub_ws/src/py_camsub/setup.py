@@ -20,10 +20,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-        ],
-    },
-    entry_points={
-        'console_scripts': [
                 'listener = py_camsub.image_subscriber:main',
         ],
     },
