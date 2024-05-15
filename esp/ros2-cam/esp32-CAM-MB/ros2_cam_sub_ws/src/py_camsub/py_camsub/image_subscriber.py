@@ -3,9 +3,9 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 """
-cd py_camsub  # Navigate to your package directory
-ament build    # Build the package
-. install/setup.bash  # Source the package setup script
+cd ros2_cam_sub_ws  # Navigate to your package directory
+colcon build --packages-select py_camsub    # Build the package
+source install/setup.bash  # Source the package setup script
 python3 src/py_camsub/py_camsub/image_subscriber.py  # Run the subscriber node
 
 """

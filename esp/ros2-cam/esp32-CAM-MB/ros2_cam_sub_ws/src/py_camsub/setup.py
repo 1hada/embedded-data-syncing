@@ -26,5 +26,5 @@ setup(
         'console_scripts': [
                 'listener = py_pubsub.image_subscriber:main',
         ],
-},
+    },
 )
