@@ -7,6 +7,25 @@ sudo mv camera-stream.py /bin/camera-stream
 """
 from flask import Flask, Response, request, redirect
 
+from gunicorn.app.base import BaseApplication
+from gunicorn.config import Config
+
+class FlaskApp(BaseApplication):
+    def __init__(self, app, options={}):
+        self.options = options 
+        self.application = app
+        super().__init__()
+
+    def load_config(self):
+        config = Config(self.options)
+        for key, value in config.settings.items():
+            self.cfg.set(key, value)
+
+    def load(self):
+        return self.application
+
+import ssl
+import socket
 import os
 import base64
 
@@ -15,13 +34,14 @@ app = Flask(__name__)
 # Dictionary to store camera streams
 camera_streams = {}
 
-
+"""
 # Redirect HTTP requests to HTTPS
 @app.before_request
 def redirect_to_https():
     if not request.is_secure:
         url = request.url.replace("http://", "https://", 1)
         return redirect(url, code=301)
+"""
 
 @app.route('/')
 def index():
@@ -56,6 +76,14 @@ if __name__ == '__main__':
     # Configuration variables
     app.config['SSL_CERTIFICATE'] = os.environ.get('SSL_CERTIFICATE')
     app.config['SSL_PRIVATE_KEY'] = os.environ.get('SSL_PRIVATE_KEY')
-    
-    # Run Flask app with SSL/TLS
-    app.run(host='0.0.0.0', port=443, ssl_context=(app.config['SSL_CERTIFICATE'], app.config['SSL_PRIVATE_KEY']))
+   
+    # Gunicorn options
+    options = {
+        'bind': '0.0.0.0:443',
+        'worker_class': 'sync',
+        'certfile': app.config['SSL_CERTIFICATE'],
+        'keyfile': app.config['SSL_PRIVATE_KEY'] ,
+    }
+    # gunicorn -b 0.0.0.0:443 -w 4 -k gevent --certfile $SSL_CERTIFICATE --keyfile $SSL_PRIVATE_KEY camera-stream:app
+
+    app.run(ssl_context=(app.config['SSL_CERTIFICATE'], app.config['SSL_PRIVATE_KEY']))
