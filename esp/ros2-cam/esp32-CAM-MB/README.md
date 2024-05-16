@@ -1,77 +1,62 @@
-# Setting Up Communication Between ESP32s and Jetson Nano with ROS2, mDNS, and DNS-SD
+# Setting Up Communication Between ESP32s and A server running mDNS
+
 
 ## Requirements:
 - 4 ESP32 devices
-- 1 Jetson Nano
-- ROS2 installed on the Jetson Nano
-- Access to both ESP32 and Jetson Nano terminals
+- 1 Server machine running avahi for easy discovery of its dynamic IP address
+- Access to both ESP32 and Server Machine terminals
 
-## Step 1: Install ROS2 on Jetson Nano
-Follow the official ROS2 installation instructions for Ubuntu ARM64 (Jetson Nano) [here](https://docs.ros.org/en/foxy/Installation/Ubuntu-Install-Debians.html).
-
-## Step 2: Configure mDNS and DNS-SD on Jetson Nano
-1. Install Avahi (mDNS/DNS-SD implementation) on the Jetson Nano:
-    ```bash
-    sudo apt-get update
-    sudo apt-get install avahi-daemon
-    ```
-
-2. Configure Avahi to advertise ROS2 nodes using DNS-SD:
-    - Create a file named `ros2.service` in `/etc/avahi/services/` directory:
-      ```bash
-      sudo nano /etc/avahi/services/ros2.service
-      ```
-    - Add the following content to the `ros2.service` file:
-      ```xml
-      <?xml version="1.0" standalone='no'?>
-      <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-      <service-group>
-        <name replace-wildcards="yes">ROS 2 Nodes on Jetson Nano</name>
-        <service>
-          <type>_ros2._tcp</type>
-          <port>8080</port>
-        </service>
-      </service-group>
-      ```
-    - Save and exit the file.
-
-3. Restart the Avahi service:
-    ```bash
-    sudo systemctl restart avahi-daemon
-    ```
-
-## Step 3: Configure ESP32 Devices
+## Step 1: Configure ESP32 Devices
 1. Install the required libraries for mDNS/DNS-SD support on ESP32 using the Arduino IDE or PlatformIO.
-2. Write code to discover ROS2 nodes using mDNS/DNS-SD. Example code:
-   ```cpp
-   #include <ESPmDNS.h>
+2. Write code to discover the server using mDNS/DNS-SD. See `main.cpp`
 
-   void setup() {
-     Serial.begin(115200);
-     if (!MDNS.begin("esp32")) 
-     {
-       Serial.println("Error setting up MDNS responder!");
-       delay(10000);  // Wait for 10 seconds before restarting
-       ESP.restart(); // Restart the ESP32
-     }
-     Serial.println("MDNS responder started");
-     Serial.println("MDNS responder started");
-     MDNS.addService("ros2", "tcp", 8080);
-   }
+## Step 2: Set Up Certificate for HTTPS
 
-   void loop() {
-     // do nothing
-   }
-   ```
+> Note : if the server or client's IP address changes frequently (e.g., due to dynamic IP assignment by the ISP), you may face challenges with domain validation when obtaining SSL/TLS certificates from Certificate Authorities (CAs). Many CAs require domain validation to ensure that the entity requesting the certificate has control over the domain.
 
+In such cases, you have a few options:
 
-## Step 4: Subscribe To data from the ESP32 on another machine
+1. **Use a Dynamic DNS (DDNS) Service**: Register a domain name and use a DDNS service that automatically updates the DNS records with the current IP address of your server. This allows you to obtain SSL/TLS certificates for your domain and use them even if your server's IP address changes.
+
+2. **Obtain a Certificate with a Wildcard Domain**: If you have control over a domain and its DNS records, you can obtain a wildcard SSL/TLS certificate (*.example.com) that covers all subdomains. This allows you to use the certificate for any server within the domain, regardless of its IP address.
+
+Generate and locate certificates (Root CA certificate, server certificate (CRT), and server private key) :
+
+### 1. Generating SSL/TLS Certificates:
+
+#### Root CA Certificate:
+```bash
+openssl genrsa -out rootCA.key 2048
+openssl req -x509 -new -nodes -key rootCA.key -sha256 -out rootCA.crt
 ```
-#https://docs.ros.org/en/humble/Tutorials/Beginner-Client-Libraries/Writing-A-Simple-Py-Publisher-And-Subscriber.html
-ros2 pkg create --build-type ament_python --license Apache-2.0 py_pubsub
-cd ros2_ws
-cd ros2_ws/src/py_pubsub/py_pubsub
-wget https://raw.githubusercontent.com/ros2/examples/humble/rclpy/topics/minimal_publisher/examples_rclpy_minimal_publisher/publisher_member_function.py
-wget https://raw.githubusercontent.com/ros2/examples/humble/rclpy/topics/minimal_subscriber/examples_rclpy_minimal_subscriber/subscriber_member_function.py
 
+#### Server Certificate (CRT) and Private Key:
+```bash
+openssl genrsa -out server.key 2048
+openssl req -new -key server.key -out server.csr
+openssl x509 -req -in server.csr -CA rootCA.crt -CAkey rootCA.key -CAcreateserial -out server.crt -sha256
+sudo mv server.crt /etc/ssl/certs/server.crt
+sudo mv server.key /etc/ssl/private/server.key
+# move the rootCA from the previous commands 
+sudo mv rootCA.key /etc/ssl/private/rootCA.key
+# get the cert data before removing rootCA.crt
+rm server.csr
+export SSL_CERTIFICATE=/etc/ssl/certs/server.crt
+export SSL_PRIVATE_KEY=/etc/ssl/private/server.key
 ```
+
+### 2. Locating Certificates:
+
+#### Root CA Certificate:
+- Store `rootCA.crt` securely. This certificate will be used by clients to verify the authenticity of your server's certificate.
+
+#### Server Certificate (CRT) and Private Key:
+- Store `server.crt` (server's certificate) and `server.key` (server's private key) securely on your server. These files will be used by your server to establish SSL/TLS connections.
+
+### Best Practice for Placement:
+- Place the Root CA certificate (`rootCA.crt`) on clients that will be connecting to your server.
+- Place the server certificate (`server.crt`) and private key (`server.key`) on your server.
+
+Ensure that you protect the private key (`server.key`) with appropriate permissions to prevent unauthorized access.
+
+By following these practices, you can securely generate, store, and use SSL/TLS certificates for your server.

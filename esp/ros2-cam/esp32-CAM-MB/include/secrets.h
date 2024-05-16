@@ -1,3 +1,4 @@
+#include <pgmspace.h>
 #ifndef SECRETS_H
 #define SECRETS_H
 
@@ -9,5 +10,23 @@ const String MDNS_HOSTNAME = "<>";
 const uint16_t MDNS_PORT = 443;
 
 const String CA_CERTIFICATE = "<>";
+
+// Amazon Root CA 1
+static const char CERT_CA[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+-----END CERTIFICATE-----
+)EOF";
+
+// Device Certificate
+static const char CERT_CRT[] PROGMEM = R"KEY(
+-----BEGIN CERTIFICATE-----
+-----END CERTIFICATE-----
+)KEY";
+
+// Device Private Key
+static const char CERT_PRIVATE[] PROGMEM = R"KEY(
+-----BEGIN RSA PRIVATE KEY-----
+-----END RSA PRIVATE KEY-----
+)KEY";
 
 #endif

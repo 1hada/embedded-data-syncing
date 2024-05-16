@@ -99,7 +99,11 @@ void sendFrameToServer(uint8_t *data, size_t len)
   WiFiClientSecure client;
 
   // Make sure to match the root ca certificate of the server
-  client.setCACert(CA_CERTIFICATE.c_str());
+  client.setCACert(CERT_CA);
+
+  // Set server certificate and private key
+  client.setCertificate(CERT_CRT);
+  client.setPrivateKey(CERT_PRIVATE);
 
   // Connect to the server
   if (!client.connect(server_url.c_str(), MDNS_PORT))
@@ -111,7 +115,7 @@ void sendFrameToServer(uint8_t *data, size_t len)
   // Base64 encode the frame data
   String frameData = base64::encode(data, len);
 
-  // Set up the HTTP request headers
+  // Set up the HTTPS request headers
   String headers = "POST /video_stream HTTP/1.1\r\n";
   headers += "Host: " + String(server_url) + "\r\n";
   headers += "Content-Type: application/x-www-form-urlencoded\r\n";

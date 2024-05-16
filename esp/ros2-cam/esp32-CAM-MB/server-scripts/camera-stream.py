@@ -1,4 +1,6 @@
 from flask import Flask, Response, request
+from OpenSSL import SSL
+import os
 import base64
 
 app = Flask(__name__)
@@ -36,4 +38,22 @@ def stream(camera_id):
         return 'Camera {} not found'.format(camera_id)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=443, ssl_context=('cert.pem', 'key.pem'))
+    # Configuration variables
+    app.config['SSL_CERTIFICATE'] = os.environ.get('SSL_CERTIFICATE')
+    app.config['SSL_PRIVATE_KEY'] = os.environ.get('SSL_PRIVATE_KEY')
+    
+    # Load SSL/TLS certificates
+    cert = None
+    key = None
+    with open(app.config['SSL_CERTIFICATE'], 'rb') as cert_file:
+        cert = cert_file.read()
+    with open(app.config['SSL_PRIVATE_KEY'], 'rb') as key_file:
+        key = key_file.read()
+
+    # Create SSL context
+    ssl_context = SSL.Context(SSL.SSLv23_METHOD)
+    ssl_context.use_certificate_chain_file(app.config['SSL_CERTIFICATE'])
+    ssl_context.use_privatekey_file(app.config['SSL_PRIVATE_KEY'])
+    
+    # Run Flask app with SSL/TLS
+    app.run(host='0.0.0.0', port=443, ssl_context=(cert, key))
