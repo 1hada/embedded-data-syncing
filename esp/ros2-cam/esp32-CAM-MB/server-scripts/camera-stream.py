@@ -5,24 +5,9 @@ pip3 install flask
 chmod +x camera-stream.py
 sudo mv camera-stream.py /bin/camera-stream
 """
+
+import uwsgi
 from flask import Flask, Response, request, redirect
-
-from gunicorn.app.base import BaseApplication
-from gunicorn.config import Config
-
-class FlaskApp(BaseApplication):
-    def __init__(self, app, options={}):
-        self.options = options 
-        self.application = app
-        super().__init__()
-
-    def load_config(self):
-        config = Config(self.options)
-        for key, value in config.settings.items():
-            self.cfg.set(key, value)
-
-    def load(self):
-        return self.application
 
 import ssl
 import socket
@@ -85,7 +70,6 @@ if __name__ == '__main__':
         'keyfile': app.config['SSL_PRIVATE_KEY'] ,
     }
     
-    import uwsgi
     # uWSGI options
     options = {
         'http-socket': '0.0.0.0:443',
