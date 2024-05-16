@@ -4,6 +4,11 @@
 .vscode/launch.json
 .vscode/ipch
 real-secrets/rootCA.crt
+real-secrets/rootCA.key
 real-secrets/server.crt
+real-secrets/server.csr
 real-secrets/server.key
-secrets.h
+real-secrets/secrets.h
+real-secrets/client.csr
+real-secrets/client.crt
+real-secrets/client.key
