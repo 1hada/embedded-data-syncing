@@ -84,6 +84,17 @@ if __name__ == '__main__':
         'certfile': app.config['SSL_CERTIFICATE'],
         'keyfile': app.config['SSL_PRIVATE_KEY'] ,
     }
-    # gunicorn -b 0.0.0.0:443 -w 4 -k gevent --certfile $SSL_CERTIFICATE --keyfile $SSL_PRIVATE_KEY camera-stream:app
+    
+    import uwsgi
+    # uWSGI options
+    options = {
+        'http-socket': '0.0.0.0:443',
+        'http-socket-modifier1': '9',
+        'https': f"{app.config['SSL_CERTIFICATE']},{app.config['SSL_PRIVATE_KEY']}",
+        'module': 'app:app',
+    }
 
-    app.run(ssl_context=(app.config['SSL_CERTIFICATE'], app.config['SSL_PRIVATE_KEY']))
+    # Run uWSGI with the specified options
+    uwsgi.applications = {'': app}
+    uwsgi.setup()
+    uwsgi.run(**options)
