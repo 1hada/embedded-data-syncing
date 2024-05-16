@@ -106,7 +106,7 @@ void sendFrameToServer(uint8_t *data, size_t len)
   client.setPrivateKey(CERT_PRIVATE);
 
   // Connect to the server
-  if (!client.connect(server_url.c_str(), MDNS_PORT))
+  if (!client.connect(ip, MDNS_PORT))
   {
     Serial.println("Connection to server failed");
     return;
@@ -155,7 +155,9 @@ void nameFound(const char *name, IPAddress curIp)
     Serial.print("' is ");
     Serial.println(curIp);
     ip = curIp;
-    server_url = "https://" + String(ip) + "/video_stream";
+    server_url = "https://" + ip.toString() + "/video_stream";
+    Serial.print("Server URL is ");
+    Serial.println(server_url);
     server_found = true;
   }
   else
@@ -168,6 +170,7 @@ void nameFound(const char *name, IPAddress curIp)
 
 void resolveHostIp(void *parameter)
 {
+  int loopWait_ms = 5000;
   while (ip == INADDR_NONE)
   {
     // You can use the "isResolvingName()" function to find out whether the
@@ -180,12 +183,13 @@ void resolveHostIp(void *parameter)
       // library will automatically resend the query every second until it
       // either receives an answer or your timeout is reached - In either case,
       // the callback function you specified in setup() will be called.
-      mdns.resolveName(MDNS_HOSTNAME.c_str(), 5000);
+      mdns.resolveName(MDNS_HOSTNAME.c_str(), loopWait_ms);
     }
 
     // This actually runs the mDNS module. YOU HAVE TO CALL THIS PERIODICALLY,
     // OR NOTHING WILL WORK! Preferably, call it once per loop().
     mdns.run();
+    vTaskDelay(pdMS_TO_TICKS(loopWait_ms)); // Delay for 1000 milliseconds (1 second)
   }
 
   // Task complete, delete the task
@@ -225,7 +229,7 @@ void initCamera(void *parameter)
   if (err != ESP_OK)
   {
     Serial.printf("Camera init failed with error 0x%x", err);
-    vTaskDelete(NULL);
+    ESP.restart();
   }
 
   // Task complete, delete the task
@@ -237,12 +241,6 @@ void setup()
   Serial.begin(115200);
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  /*
-  The ESP32 has built-in power-saving features that can put the Wi-Fi module into sleep mode when it's not actively transmitting or receiving data. While in sleep mode, the Wi-Fi module consumes less power, which can be beneficial for battery-powered applications to conserve energy.
-
-  However, in some cases, particularly in applications where continuous network connectivity is required, such as in IoT devices communicating with ROS2, it may be necessary to disable the Wi-Fi sleep mode to ensure consistent and uninterrupted communication.
-  */
-  WiFi.setSleep(false);
 
   while (WiFi.status() != WL_CONNECTED)
   {
@@ -256,7 +254,7 @@ void setup()
   // Arduino via the host name "arduino.local", provided that your operating
   // system is mDNS/Bonjour-enabled (such as macOS).
   // Always call this before any other method!
-  mdns.begin(WiFi.localIP(), MDNS_HOSTNAME.c_str());
+  mdns.begin(WiFi.localIP(), SOURCE_ID);
   // We specify the function that the mDNS library will call when it
   // resolves a host name. In this case, we will call the function named
   // "nameFound".
