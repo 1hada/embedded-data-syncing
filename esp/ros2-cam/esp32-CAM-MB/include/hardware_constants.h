@@ -1,7 +1,7 @@
 #ifndef HARDWARE_CONSTANTS_H
 #define HARDWARE_CONSTANTS_H
 
-// Add ESP32-WROOM-32D pins as needed
+// Add ESP32-CAM-MD pins as needed
 
 // FRAMESIZE_UXGA (1600 x 1200)
 // Camera frame dimensions

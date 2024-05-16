@@ -1,13 +1,13 @@
 #ifndef SECRETS_H
 #define SECRETS_H
 
-const char WIFI_SSID[] = "";
-const char WIFI_PASSWORD[] = "";
+const char WIFI_SSID[] = "<>";
+const char WIFI_PASSWORD[] = "<>";
+const char SOURCE_ID[] = "source_1";
 
-#define AGENT_IP "AGENT_IP_ADDRESS"
-#define AGENT_PORT 2018 // AGENT port number
+const String MDNS_HOSTNAME = "<>";
+const uint16_t MDNS_PORT = 443;
 
-#define SERVICE_NAME "ros2"
-#define SERVICE_PORT 8080 // AGENT port number
+const String CA_CERTIFICATE = "<>";
 
 #endif
