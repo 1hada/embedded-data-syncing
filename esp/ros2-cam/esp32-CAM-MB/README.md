@@ -37,6 +37,8 @@ openssl req -new -key server.key -out server.csr
 openssl x509 -req -in server.csr -CA rootCA.crt -CAkey rootCA.key -CAcreateserial -out server.crt -sha256
 sudo mv server.crt /etc/ssl/certs/server.crt
 sudo mv server.key /etc/ssl/private/server.key
+#sudo mv client.crt /etc/ssl/certs/client.crt
+sudo mv client.key /etc/ssl/private/client.key
 # move the rootCA from the previous commands 
 sudo mv rootCA.key /etc/ssl/private/rootCA.key
 # get the cert data before removing rootCA.crt
@@ -44,6 +46,42 @@ rm server.csr
 export SSL_CERTIFICATE=/etc/ssl/certs/server.crt
 export SSL_PRIVATE_KEY=/etc/ssl/private/server.key
 ```
+
+##### Alternate
+```bash
+#!/bin/bash
+# https://github.com/espressif/arduino-esp32/issues/6060#issuecomment-1227201450
+
+CA_IP_CN="xxx.xxx.xxx.xxx" # This shouldn't be relevant but I haven't tested
+SERVER_IP_CN="xxx.xxx.xxx.xxx" # or FQDN
+CLIENT_HOSTNAME="Client Device"
+
+SUBJECT_CA="/C=SE/ST=Italy/L=Roma/O=himinds/OU=CA/CN=$CA_IP_CN"
+SUBJECT_SERVER="/C=SE/ST=Italy/L=Roma/O=himinds/OU=Server/CN=$SERVER_IP_CN"
+SUBJECT_CLIENT="/C=SE/ST=Italy/L=Roma/O=himinds/OU=Client/CN=$CLIENT_HOSTNAME"
+
+function generate_CA () {
+   echo "$SUBJECT_CA"
+   openssl req -x509 -nodes -sha256 -newkey rsa:2048 -subj "$SUBJECT_CA"  -days 365 -keyout ca.key -out ca.crt
+}
+
+function generate_server () {
+   echo "$SUBJECT_SERVER"
+   openssl req -nodes -sha256 -new -subj "$SUBJECT_SERVER" -keyout server.key -out server.csr
+   openssl x509 -req -sha256 -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365
+}
+
+function generate_client () {
+   echo "$SUBJECT_CLIENT"
+   openssl req -new -nodes -sha256 -subj "$SUBJECT_CLIENT" -out client.csr -keyout client.key 
+   openssl x509 -req -sha256 -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365
+}
+
+generate_CA
+generate_server
+generate_client
+```
+
 
 ### 2. Locating Certificates:
 
