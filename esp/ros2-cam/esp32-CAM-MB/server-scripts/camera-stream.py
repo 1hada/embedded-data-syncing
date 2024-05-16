@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 """
-sudo pip3 install flask
+pip3 install flask
 chmod +x camera-stream.py
 sudo mv camera-stream.py /bin/camera-stream
 """
-from flask import Flask, Response, request
+from flask import Flask, Response, request, redirect
 
 import os
 import base64
@@ -15,9 +15,17 @@ app = Flask(__name__)
 # Dictionary to store camera streams
 camera_streams = {}
 
+
+# Redirect HTTP requests to HTTPS
+@app.before_request
+def redirect_to_https():
+    if not request.is_secure:
+        url = request.url.replace("http://", "https://", 1)
+        return redirect(url, code=301)
+
 @app.route('/')
 def index():
-    return 'Hello, World!'
+    return f'Hello, World! Check {camera_streams.keys()}'
 
 @app.route('/video_stream', methods=['POST'])
 def video_stream():
