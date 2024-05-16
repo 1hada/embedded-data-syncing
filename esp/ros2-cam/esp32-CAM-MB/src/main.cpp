@@ -3,7 +3,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <ros2arduino.h>
-#include <ArduinoMDNS.h>
+// #include <ArduinoMDNS.h>
 
 #include <WiFi.h>
 
@@ -45,139 +45,93 @@
 void startCameraServer();
 void setupLedFlash(int pin);
 
-// To Be discovered by DNS
-#define AGENT_IP "AGENT_IP_ADDRESS"
-#define AGENT_PORT 2018 // AGENT port number
+// ROS 2 node
+ros2::Node node("esp32_camera_publisher");
 
-#define PUBLISH_FREQUENCY 2 // hz
-
-void publishString(std_msgs::String *msg, void *arg)
+// Function to initialize camera
+void initCamera(void *parameter)
 {
-  (void)(arg);
-
-  static int cnt = 0;
-  sprintf(msg->data, "Hello ros2arduino %d", cnt++);
-}
-
-class StringPub : public ros2::Node
-{
-public:
-  StringPub()
-      : Node("ros2arduino_pub_node")
-  {
-    ros2::Publisher<std_msgs::String> *publisher_ = this->createPublisher<std_msgs::String>("arduino_chatter");
-    this->createWallFreq(PUBLISH_FREQUENCY, (ros2::CallbackFunc)publishString, nullptr, publisher_);
-  }
-};
-
-void setup()
-{
-  Serial.begin(115200);
-  if (!MDNS.begin("esp32"))
-  {
-    Serial.println("Error setting up MDNS responder!");
-    delay(10000);  // Wait for 10 seconds before restarting
-    ESP.restart(); // Restart the ESP32
-  }
-  Serial.println("MDNS responder started");
-  MDNS.addService(SERVICE_NAME, "tcp", SERVICE_PORT);
-
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sccb_sda = SIOD_GPIO_NUM;
-  config.pin_sccb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
+  config.pin_d0 = CAMERA_Y2_GPIO_NUM;
+  config.pin_d1 = CAMERA_Y3_GPIO_NUM;
+  config.pin_d2 = CAMERA_Y4_GPIO_NUM;
+  config.pin_d3 = CAMERA_Y5_GPIO_NUM;
+  config.pin_d4 = CAMERA_Y6_GPIO_NUM;
+  config.pin_d5 = CAMERA_Y7_GPIO_NUM;
+  config.pin_d6 = CAMERA_Y8_GPIO_NUM;
+  config.pin_d7 = CAMERA_Y9_GPIO_NUM;
+  config.pin_xclk = CAMERA_XCLK_GPIO_NUM;
+  config.pin_pclk = CAMERA_PCLK_GPIO_NUM;
+  config.pin_vsync = CAMERA_VSYNC_GPIO_NUM;
+  config.pin_href = CAMERA_HREF_GPIO_NUM;
+  config.pin_sscb_sda = CAMERA_SIOD_GPIO_NUM;
+  config.pin_sscb_scl = CAMERA_SIOC_GPIO_NUM;
+  config.pin_pwdn = CAMERA_PWDN_GPIO_NUM;
+  config.pin_reset = CAMERA_RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
   config.frame_size = FRAMESIZE_UXGA;
-  config.pixel_format = PIXFORMAT_JPEG; // for streaming
-  // config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
-  config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 12;
+  config.jpeg_quality = 10;
   config.fb_count = 1;
 
-  // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
-  //                      for larger pre-allocated frame buffer.
-  if (config.pixel_format == PIXFORMAT_JPEG)
-  {
-    if (psramFound())
-    {
-      config.jpeg_quality = 10;
-      config.fb_count = 2;
-      config.grab_mode = CAMERA_GRAB_LATEST;
-    }
-    else
-    {
-      // Limit the frame size when PSRAM is not available
-      config.frame_size = FRAMESIZE_SVGA;
-      config.fb_location = CAMERA_FB_IN_DRAM;
-    }
-  }
-  else
-  {
-    // Best option for face detection/recognition
-    config.frame_size = FRAMESIZE_240X240;
-#if CONFIG_IDF_TARGET_ESP32S3
-    config.fb_count = 2;
-#endif
-  }
-
-#if defined(CAMERA_MODEL_ESP_EYE)
-  pinMode(13, INPUT_PULLUP);
-  pinMode(14, INPUT_PULLUP);
-#endif
-
-  // camera init
+  // Initialize camera with specified configuration
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK)
   {
     Serial.printf("Camera init failed with error 0x%x", err);
-    return;
+    vTaskDelete(NULL);
   }
 
-  sensor_t *s = esp_camera_sensor_get();
-  // initial sensors are flipped vertically and colors are a bit saturated
-  if (s->id.PID == OV3660_PID)
+  // Task complete, delete the task
+  vTaskDelete(NULL);
+}
+
+// Function to capture image and publish to ROS 2
+void captureAndPublishImage(void *parameter)
+{
+  while (true)
   {
-    s->set_vflip(s, 1);       // flip it back
-    s->set_brightness(s, 1);  // up the brightness just a bit
-    s->set_saturation(s, -2); // lower the saturation
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb)
+    {
+      Serial.println("Camera capture failed");
+      continue;
+    }
+
+    // Create Image message
+    sensor_msgs::msg::Image img_msg;
+    img_msg.header.stamp = node.now();
+    img_msg.height = fb->height;
+    img_msg.width = fb->width;
+    img_msg.encoding = "jpeg";
+    img_msg.is_bigendian = false;
+    img_msg.step = fb->len / fb->height;
+    img_msg.data.resize(fb->len);
+    memcpy(img_msg.data.data(), fb->buf, fb->len);
+
+    // Publish Image message
+    node.publish("/image/color/source_1", img_msg);
+
+    // Release the frame buffer
+    esp_camera_fb_return(fb);
+
+    // Delay for next capture (adjust as needed)
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Delay for 1000 milliseconds (1 second)
   }
-  // drop down frame size for higher initial frame rate
-  if (config.pixel_format == PIXFORMAT_JPEG)
-  {
-    s->set_framesize(s, FRAMESIZE_QVGA);
-  }
+}
 
-#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-  s->set_vflip(s, 1);
-  s->set_hmirror(s, 1);
-#endif
-
-#if defined(CAMERA_MODEL_ESP32S3_EYE)
-  s->set_vflip(s, 1);
-#endif
-
-// Setup LED FLash if LED pin is defined in camera_pins.h
-#if defined(LED_GPIO_NUM)
-  setupLedFlash(LED_GPIO_NUM);
-#endif
+void setup()
+{
+  Serial.begin(115200);
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  /*
+  The ESP32 has built-in power-saving features that can put the Wi-Fi module into sleep mode when it's not actively transmitting or receiving data. While in sleep mode, the Wi-Fi module consumes less power, which can be beneficial for battery-powered applications to conserve energy.
+
+  However, in some cases, particularly in applications where continuous network connectivity is required, such as in IoT devices communicating with ROS2, it may be necessary to disable the Wi-Fi sleep mode to ensure consistent and uninterrupted communication.
+  */
   WiFi.setSleep(false);
 
   while (WiFi.status() != WL_CONNECTED)
@@ -188,16 +142,28 @@ void setup()
   Serial.println("");
   Serial.println("WiFi connected");
 
-  startCameraServer();
+  /*
+  if (!MDNS.begin("esp32"))
+  {
+    Serial.println("Error setting up MDNS responder!");
+    delay(10000);  // Wait for 10 seconds before restarting
+    ESP.restart(); // Restart the ESP32
+  }
+  Serial.println("MDNS responder started");
+  MDNS.addService(SERVICE_NAME, "tcp", SERVICE_PORT);
+  */
+
+  // Initialize ROS 2 node
+  node.initNode();
+
+  // Create tasks for camera initialization and image capture
+  xTaskCreatePinnedToCore(initCamera, "initCamera", 4096, NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(captureAndPublishImage, "captureAndPublishImage", 16384, NULL, 5, NULL, 1); // 16384 stack depth
+
+  // startCameraServer();
 }
 
 void loop()
 {
-  Serial.print("Camera Ready! Use 'http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("' to connect");
-  delay(10000);
-
-  static StringPub StringNode;
-  ros2::spin(&StringNode);
+  // This loop will not execute since tasks are running in FreeRTOS
 }
