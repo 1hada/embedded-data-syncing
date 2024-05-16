@@ -10,6 +10,7 @@
             "includePath": [
                 "/home/redhat-biobe/workspace/embedded-data-syncing/esp/ros2-cam/esp32-CAM-MB/include",
                 "/home/redhat-biobe/workspace/embedded-data-syncing/esp/ros2-cam/esp32-CAM-MB/src",
+                "/home/redhat-biobe/workspace/embedded-data-syncing/esp/ros2-cam/esp32-CAM-MB/.pio/libdeps/esp32cammbbasiccam/ros2arduino/src",
                 "/home/redhat-biobe/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "/home/redhat-biobe/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/newlib/platform_include",
                 "/home/redhat-biobe/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/freertos/include",
@@ -240,6 +241,7 @@
                 "path": [
                     "/home/redhat-biobe/workspace/embedded-data-syncing/esp/ros2-cam/esp32-CAM-MB/include",
                     "/home/redhat-biobe/workspace/embedded-data-syncing/esp/ros2-cam/esp32-CAM-MB/src",
+                    "/home/redhat-biobe/workspace/embedded-data-syncing/esp/ros2-cam/esp32-CAM-MB/.pio/libdeps/esp32cammbbasiccam/ros2arduino/src",
                     "/home/redhat-biobe/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "/home/redhat-biobe/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/newlib/platform_include",
                     "/home/redhat-biobe/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/freertos/include",
