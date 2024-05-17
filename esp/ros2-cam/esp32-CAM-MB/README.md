@@ -37,7 +37,7 @@ openssl req -new -key server.key -out server.csr
 openssl x509 -req -in server.csr -CA rootCA.crt -CAkey rootCA.key -CAcreateserial -out server.crt -sha256
 sudo mv server.crt /etc/ssl/certs/server.crt
 sudo mv server.key /etc/ssl/private/server.key
-#sudo mv client.crt /etc/ssl/certs/client.crt
+sudo mv client.crt /etc/ssl/certs/client.crt
 sudo mv client.key /etc/ssl/private/client.key
 # move the rootCA from the previous commands 
 sudo mv rootCA.key /etc/ssl/private/rootCA.key
@@ -51,6 +51,7 @@ export SSL_PRIVATE_KEY=/etc/ssl/private/server.key
 ```bash
 #!/bin/bash
 # https://github.com/espressif/arduino-esp32/issues/6060#issuecomment-1227201450
+# for mqtt https://gist.github.com/suru-dissanaike/4344f572b14c108fc3312fc4fcc3d138
 
 CA_IP_CN="xxx.xxx.xxx.xxx" # This shouldn't be relevant but I haven't tested
 SERVER_IP_CN="xxx.xxx.xxx.xxx" # or FQDN

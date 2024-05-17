@@ -46,6 +46,8 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
+#include <PubSubClient.h>
+
 #include "secrets.h"
 #include "hardware_constants.h"
 
@@ -53,7 +55,8 @@
 
 // Helpers
 void nameFound(const char *name, IPAddress ip);
-void sendFrameToServer(uint8_t *data, size_t len);
+void sendFrameToServerHttps(uint8_t *data, size_t len);
+void reconnect();
 
 // Tasks
 void captureAndPublishImage(void *parameter);
@@ -67,6 +70,28 @@ MDNS mdns(udp);
 IPAddress ip;
 String server_url = "https://your_ubuntu_server_ip/video_stream";
 bool server_found = false;
+// Use WiFiClientSecure for HTTPS
+WiFiClientSecure client;
+PubSubClient mqttClient(client);
+bool mqtt_setup_required = true;
+
+// Function to connect to MQTT broker
+void reconnect()
+{
+  while (!mqttClient.connected())
+  {
+    if (mqttClient.connect("ESP32Client"))
+    {
+      Serial.println("Connected to MQTT Broker");
+      mqtt_setup_required = true;
+    }
+    else
+    {
+      Serial.print("Failed to connect to MQTT Broker, retrying in 5 seconds...");
+      delay(5000);
+    }
+  }
+}
 
 void captureAndPublishImage(void *parameter)
 {
@@ -81,8 +106,22 @@ void captureAndPublishImage(void *parameter)
         vTaskDelay(pdMS_TO_TICKS(1000));
         continue;
       }
+
+      if (mqtt_setup_required)
+      {
+
+        // Connect to MQTT Broker
+        client.setCACert(rootCA);
+        client.setCertificate(server_crt);
+        client.setPrivateKey(server_key);
+        client.setServer(mqtt_server, 8883);
+        reconnect();
+      }
       // Send the frame to the server
-      sendFrameToServer(fb->buf, fb->len);
+      // FOR TESTING sendFrameToServerHttps(fb->buf, fb->len);
+
+      // Publish camera frame as MQTT message
+      mqttClient.publish("camera", (char *)fb->buf, fb->len);
 
       // Release the frame buffer
       esp_camera_fb_return(fb);
@@ -93,20 +132,20 @@ void captureAndPublishImage(void *parameter)
   }
 }
 
-void sendFrameToServer(uint8_t *data, size_t len)
+void sendFrameToServerHttps(uint8_t *data, size_t len)
 {
-  // Use WiFiClientSecure for HTTPS
-  WiFiClientSecure client;
 
   // Make sure to match the root ca certificate of the server
-  client.setCACert(CERT_CA);
+  // client.setCACert(CERT_CA);
 
   // Set server certificate and private key
-  client.setCertificate(CERT_CRT);
-  client.setPrivateKey(CERT_PRIVATE);
+  // client.setCertificate(CERT_CRT);
+  // client.setPrivateKey(CERT_PRIVATE);
 
   // Connect to the server
-  if (!client.connect(ip, MDNS_PORT))
+  // WiFiClientSecure::connect(IPAddress ip, uint16_t port, const char *CA_cert, const char *cert, const char *private_key)
+  // if (!client.connect(ip, MDNS_PORT))
+  if (!client.connect(ip, MDNS_PORT, CERT_CA, CERT_CRT, CERT_PRIVATE))
   {
     Serial.println("Connection to server failed");
     return;

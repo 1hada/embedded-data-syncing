@@ -1,8 +1,13 @@
+#!/usr/bin/env python3
 import paho.mqtt.client as mqtt
 import ssl
 import os
-
-
+"""
+sudo apt update
+sudo apt install mosquitto mosquitto-clients -y
+sudo snap install mosquitto
+sudo systemctl start mosquitto
+"""
 def on_message(client, userdata, message):
     print(f"Received message: {message.payload.decode()}")
 
