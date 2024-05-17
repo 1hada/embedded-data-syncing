@@ -1,84 +1,23 @@
-#!/usr/bin/env python3
-
-"""
-pip3 install flask
-chmod +x camera-stream.py
-sudo mv camera-stream.py /bin/camera-stream
-"""
-
-import uwsgi
-from flask import Flask, Response, request, redirect
-
+import paho.mqtt.client as mqtt
 import ssl
-import socket
 import os
-import base64
 
-app = Flask(__name__)
+def on_message(client, userdata, message):
+    print(f"Received message: {message.payload.decode()}")
 
-# Dictionary to store camera streams
-camera_streams = {}
-
-"""
-# Redirect HTTP requests to HTTPS
-@app.before_request
-def redirect_to_https():
-    if not request.is_secure:
-        url = request.url.replace("http://", "https://", 1)
-        return redirect(url, code=301)
-"""
-
-@app.route('/')
-def index():
-    return f'Hello, World! Check {camera_streams.keys()}'
-
-@app.route('/video_stream', methods=['POST'])
-def video_stream():
-    # Get the camera ID from the request
-    camera_id = request.headers.get('X-Camera-ID')
-    
-    # Get the frame data from the request
-    frame_data = request.form.get('frame')
-
-    # Decode base64-encoded frame data
-    frame_bytes = base64.b64decode(frame_data)
-
-    # Store the frame data in the dictionary
-    camera_streams[camera_id] = frame_bytes
-
-    return 'Frame received for camera {}'.format(camera_id)
-
-@app.route('/stream/<string:camera_id>')
-def stream(camera_id):
-    # Check if camera ID exists in the dictionary
-    if camera_id in camera_streams:
-        # Send the stored frame data as response
-        return Response(camera_streams[camera_id], mimetype='image/jpeg')
-    else:
-        return 'Camera {} not found'.format(camera_id)
 
 if __name__ == '__main__':
     # Configuration variables
-    app.config['SSL_CERTIFICATE'] = os.environ.get('SSL_CERTIFICATE')
-    app.config['SSL_PRIVATE_KEY'] = os.environ.get('SSL_PRIVATE_KEY')
-   
-    # Gunicorn options
-    options = {
-        'bind': '0.0.0.0:443',
-        'worker_class': 'sync',
-        'certfile': app.config['SSL_CERTIFICATE'],
-        'keyfile': app.config['SSL_PRIVATE_KEY'] ,
-    }
-    
-    # uWSGI options
-    options = {
-        'http-socket': '0.0.0.0:443',
-        'http-socket-modifier1': '9',
-        'https': f"{app.config['SSL_CERTIFICATE']},{app.config['SSL_PRIVATE_KEY']}",
-        'module': 'app:app',
-    }
+    ROOTCA_CERTIFICATE = os.environ.get('ROOTCA_CERTIFICATE')
+    SSL_CERTIFICATE = os.environ.get('SSL_CERTIFICATE')
+    SSL_PRIVATE_KEY = os.environ.get('SSL_PRIVATE_KEY')
+    mqtt_client = mqtt.Client()
+    mqtt_client.on_message = on_message
 
-    # Run uWSGI with the specified options
-    uwsgi.applications = {'': app}
-    uwsgi.setup()
-    uwsgi.run(**options)
+    # Set TLS/SSL configuration
+    mqtt_client.tls_set(ca_certs=ROOTCA_CERTIFICATE, certfile=SSL_CERTIFICATE, keyfile=SSL_PRIVATE_KEY, cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2, ciphers=None)
+
+    mqtt_client.connect("localhost", port=1883,keepalive= 60)
+    mqtt_client.subscribe("camera")
+
+    mqtt_client.loop_forever()
