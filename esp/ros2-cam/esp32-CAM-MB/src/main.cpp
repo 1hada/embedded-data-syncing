@@ -96,14 +96,16 @@ void captureAndPublishImage(void *parameter)
 void sendFrameToServer(uint8_t *data, size_t len)
 {
   // Use WiFiClientSecure for HTTPS
+  /*
   WiFiClientSecure client;
-
   // Make sure to match the root ca certificate of the server
   client.setCACert(CERT_CA);
 
   // Set server certificate and private key
   client.setCertificate(CERT_CRT);
   client.setPrivateKey(CERT_PRIVATE);
+  */
+  WiFiClient client;
 
   // Connect to the server
   if (!client.connect(ip, MDNS_PORT))
@@ -126,7 +128,8 @@ void sendFrameToServer(uint8_t *data, size_t len)
   // Send the HTTP request
   client.print(headers);
   client.print("frame=");
-  client.println(frameData);
+  client.print(frameData);
+  client.println("");
 
   // Wait for server response
   while (client.connected())
