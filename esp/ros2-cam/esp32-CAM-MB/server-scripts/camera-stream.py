@@ -5,7 +5,8 @@ pip3 install flask
 chmod +x camera-stream.py
 sudo mv camera-stream.py /bin/camera-stream
 """
-from flask import Flask, Response, request, redirect
+from flask import Flask, Response, request, redirect, send_file, render_template_string
+from io import BytesIO
 
 import os
 import base64
@@ -24,7 +25,7 @@ def redirect_to_https():
         return redirect(url, code=301)
 """
 
-@app.route('/')
+@app.route('/hello')
 def index():
     return f'Hello, World! Check {camera_streams.keys()}'
 
@@ -55,6 +56,54 @@ def stream(camera_id):
         return Response(camera_streams[camera_id], mimetype='image/jpeg')
     else:
         return 'Camera {} not found'.format(camera_id)
+
+
+# Route to serve images
+@app.route('/image/<source>')
+def serve_image(source):
+    image_bytes = camera_streams.get(source)
+    if image_bytes:
+        return send_file(BytesIO(image_bytes), mimetype='image/jpeg')
+    else:
+        return "Image not found", 404
+
+# Route to display image panels
+@app.route('/')
+def display_panels():
+    html_template = '''
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        <title>Image Panels</title>
+        <style>
+          .panel {
+            display: inline-block;
+            margin: 10px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+          }
+          img {
+            max-width: 100%;
+            height: auto;
+          }
+        </style>
+      </head>
+      <body>
+        <div>
+          {% for key in camera_streams.keys() %}
+            <div class="panel">
+              <h3>{{ key }}</h3>
+              <img src="/image/{{ key }}" alt="{{ key }}">
+            </div>
+          {% endfor %}
+        </div>
+      </body>
+    </html>
+    '''
+    return render_template_string(html_template, camera_streams=camera_streams)
 
 
 @app.route('/stream_basic')

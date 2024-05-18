@@ -132,12 +132,25 @@ void sendFrameToServer(uint8_t *data, size_t len)
   client.println("");
 
   // Wait for server response
+  // Capture the start time
+  TickType_t startTime = xTaskGetTickCount();
+  TickType_t timeout_period_ms = 5000; // 5000 milliseconds (5 seconds)
   while (client.connected())
   {
     if (client.available())
     {
       String line = client.readStringUntil('\r');
       Serial.print(line);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Delay for 1000 milliseconds (1 second)
+
+    // Calculate the elapsed time
+    TickType_t elapsedTime = xTaskGetTickCount() - startTime;
+    // Check if the elapsed time has exceeded the timeout period
+    if (elapsedTime > pdMS_TO_TICKS(timeout_period_ms))
+    {
+      Serial.print("Timeout occurred, breaking the loop.");
+      break;
     }
   }
   client.stop();
