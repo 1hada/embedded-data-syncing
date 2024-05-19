@@ -66,9 +66,9 @@ int status = WL_IDLE_STATUS; // the WiFi radio's status
 WiFiUDP udp;
 MDNS mdns(udp);
 IPAddress ip;
-String server_url = "https://your_ubuntu_server_ip/video_stream";
+String server_url = "https://your_server_ip/video_stream";
 bool server_found = false;
-// Use WiFiClientSecure for HTTPS
+// Use WiFiClientSecure for HTTPS but you must eventually also use the keys and certificates, TODO
 WiFiClientSecure client;
 
 void captureAndPublishImage(void *parameter)
@@ -98,22 +98,10 @@ void captureAndPublishImage(void *parameter)
 
 void sendFrameToServerHttps(uint8_t *data, size_t len)
 {
-  // Use WiFiClientSecure for HTTPS
-  /*
-  WiFiClientSecure client;
-  // Make sure to match the root ca certificate of the server
-  // client.setCACert(CERT_CA);
-
-  // Set server certificate and private key
-  client.setCertificate(CERT_CRT);
-  client.setPrivateKey(CERT_PRIVATE);
-  */
-
   WiFiClient client;
 
   // Connect to the server
-  // WiFiClientSecure::connect(IPAddress ip, uint16_t port, const char *CA_cert, const char *cert, const char *private_key)
-  if (!client.connect(ip, MDNS_PORT))
+  if (!client.connect(ip, HTTP_PORT))
   {
     Serial.println("Connection to server failed");
     return;
@@ -232,7 +220,7 @@ void initCamera(void *parameter)
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_UXGA;
+  config.frame_size = FRAMESIZE_VGA; // FRAMESIZE_ + QVGA|CIF|VGA|SVGA|XGA|SXGA|UXGA
   config.jpeg_quality = 10;
   config.fb_count = 1;
 

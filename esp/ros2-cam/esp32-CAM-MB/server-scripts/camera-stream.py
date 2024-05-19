@@ -2,7 +2,6 @@
 
 """
 pip3 install flask flask-socketio eventlet
-
 chmod +x camera-stream.py
 sudo mv camera-stream.py /bin/camera-stream
 """
@@ -114,9 +113,5 @@ def display_panels_stream():
 
 
 if __name__ == '__main__':
-    # Configuration variables
-    app.config['SSL_CERTIFICATE'] = os.environ.get('SSL_CERTIFICATE')
-    app.config['SSL_PRIVATE_KEY'] = os.environ.get('SSL_PRIVATE_KEY')
-    
     # Start the Flask server with SSL
     socketio.run(app, host='0.0.0.0', port=5000)
