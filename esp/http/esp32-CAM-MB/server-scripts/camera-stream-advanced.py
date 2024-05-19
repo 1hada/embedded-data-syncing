@@ -259,7 +259,7 @@ def display_panels_stream():
               <td>{{ key }}</td>
               <td id="status-{{ key }}">Default</td>
               <td id="any_camera_seen_person-{{ key }}">Default</td>
-              <td id="image-{{ key }}">Default</td>
+              <img id="image-{{ key }}" src="" alt="{{ key }}">
             </tr>
             {% endfor %}
           </tbody>
