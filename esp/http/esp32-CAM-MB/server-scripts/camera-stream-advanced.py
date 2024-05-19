@@ -105,7 +105,7 @@ def on_connect(client, userdata, flags, rc):
 def on_publish(client, userdata, mid):
     print(f"Message {mid} has been published.")
 
-client = mqtt.Client(client_id=AWS_CLIENT_ID)
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=AWS_CLIENT_ID)
 
 # Assign the callback functions
 client.on_connect = on_connect
@@ -113,7 +113,6 @@ client.on_publish = on_publish
 
 # Connect to AWS IoT
 client.connect(AWS_IOT_ENDPOINT, port=8883)
-client.loop_start()
 
 ##############################################
 # YOLO
@@ -288,5 +287,11 @@ def display_panels_stream():
 
 
 if __name__ == '__main__':
-    # Start the Flask server with SSL
-    socketio.run(app, host='0.0.0.0', port=5000)
+    try:  
+      client.loop_start()
+      # Start the Flask server with SSL
+      socketio.run(app, host='0.0.0.0', port=5000)
+    finally:
+      print("Disconnecting...")
+      client.loop_stop()
+      client.disconnect()
