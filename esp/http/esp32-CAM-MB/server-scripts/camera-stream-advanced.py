@@ -84,7 +84,8 @@ def throttled_print(message):
 S3_BUCKET_NAME = os.getenv('AWS_BUCKET_NAME')
 S3_MAIN_PATH = os.getenv('AWS_MAIN_PATH')
 s3_client = boto3.client('s3')
-
+bytes_sent = 0
+images_sent = 0
 def upload_to_s3(camera_id, image_bytes):    
     # Get the current date
     current_date = datetime.now()
@@ -108,6 +109,8 @@ def upload_image(camera_id, image_bytes):
     # Upload image to S3
     s3_url = upload_to_s3(camera_id, image_bytes)
     if s3_url:
+        bytes_sent += len(image_bytes)
+        images_sent += 1
         throttled_print("Image uploaded successfully to S3:", s3_url)
     else:
         print("Failed to upload image to S3.")
@@ -120,33 +123,8 @@ YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_ENV_YOLO_MODEL","yolov8n.pt")
 
 model = YOLO(YOLO_MODEL_PATH)  # Use the correct path to your YOLO model
 
-def draw_on(image_bytes,coordinates = ()):
-    image = Image.open(BytesIO(image_bytes))
-    image_np = np.array(image)
-
-    if len(coordinates):
-      x1,y1,x2,y2 = coordinates
-      # Draw bounding box
-      cv2.rectangle(image_np, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    # Add label
-    label = f"Person"
-    # Add label in the center of the image
-    font_scale = 1.5
-    font_thickness = 2
-    text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
-    text_x = (image_np.shape[1] - text_size[0]) // 2
-    text_y = (image_np.shape[0] + text_size[1]) // 2
-    cv2.putText(image_np, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), font_thickness)
-    _, buffer = cv2.imencode('.jpg', image_np)
-    image_with_detections = buffer.tobytes()
-
-    return image_with_detections
-    
-
-
 # Function to detect a person in the image using YOLO
-def detect_and_draw(image_bytes):
-    image_with_detections = image_bytes
+def detect(image_bytes):
     image = Image.open(BytesIO(image_bytes))
     results = model(image)
     person_detected = False
@@ -154,10 +132,8 @@ def detect_and_draw(image_bytes):
         for pred in result.pred:
             if pred[5] == 'person':  # Adjust this condition based on your model's output format
                 person_detected = True
-                x1, y1, x2, y2 = int(pred[0]), int(pred[1]), int(pred[2]), int(pred[3])
-                image_with_detections = draw_on(image_bytes,coordinates=(x1, y1, x2, y2))
     # Convert the image with detections back to bytes
-    return person_detected, image_with_detections
+    return person_detected
 
 
 @app.route('/hello')
@@ -190,20 +166,15 @@ def video_stream():
 
         # Check if we should skip inference
         any_camera_seen_person = [current_time < ts for ts in camera_timestamps.values()]
-        cur_has_person = current_time < camera_timestamps[camera_id]
         if any_camera_seen_person:
             upload_image(camera_id, image_bytes)
-            # edit image to see it on the hosted site
-            if cur_has_person:
-                image_bytes = draw_on(image_bytes)
-            camera_streams[camera_id] = image_bytes
         else:
             # Detect a person in the image and draw bounding boxes
-            person_detected, image_with_detections = detect_and_draw(image_bytes)
+            person_detected = detect(image_bytes)
             if person_detected:
                 upload_image(camera_id, image_bytes)
                 camera_timestamps[camera_id] = current_time + timedelta(minutes=5)
-                camera_streams[camera_id] = image_with_detections
+        camera_streams[camera_id] = frame_data
 
         # Emit the updated frame to all connected clients
         socketio.emit('frame_update', {'camera_id': camera_id, 'frame': frame_data})
@@ -220,7 +191,10 @@ def serve_image(source):
         return send_file(BytesIO(image_bytes), mimetype='image/jpeg')
     else:
         return "Image not found", 404
-    
+
+@app.route('/')
+def display_panels_stream():
+    return f"Images sent {images_sent} Giga Bytes sent {bytes_sent / (1024 ** 3):.2f}"
 @app.route('/')
 def display_panels_stream():
     html_template = '''
@@ -229,7 +203,7 @@ def display_panels_stream():
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-        <title>Video Panels</title>
+        <title>Image Panels</title>
         <style>
           .panel {
             display: inline-block;
@@ -257,9 +231,9 @@ def display_panels_stream():
         <script>
           var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
           socket.on('frame_update', function(data) {
-            var imgElement = document.getElementById('image-' + data.camera_id);
-            if (imgElement) {
-              imgElement.src = 'data:image/jpeg;base64,' + data.frame;
+            var imageElement = document.getElementById('image-' + data.camera_id);
+            if (imageElement) {
+              imageElement.src = 'data:image/jpeg;base64,' + data.frame;
             }
           });
         </script>
