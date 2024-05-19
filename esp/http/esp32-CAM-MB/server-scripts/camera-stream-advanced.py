@@ -15,9 +15,11 @@ import os
 import ssl
 import time
 from functools import wraps
+import base64
+import datetime
+import boto3
 
 from PIL import Image
-import paho.mqtt.client as mqtt
 from ultralytics import YOLO
 from datetime import datetime, timedelta
 
@@ -79,79 +81,48 @@ def throttled_print(message):
 
 
 ##############################################
-# MQTT
-# AWS IoT endpoint, client ID
-AWS_IOT_ENDPOINT = os.getenv("CAMERA_STREAM_ENV_AWS_IOT_ENDPOINT")
+# S3
+# Initialize AWS credentials and S3 client
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+S3_BUCKET_NAME = os.getenv('AWS_BUCKET_NAME')
+S3_MAIN_PATH = os.getenv('AWS_MAIN_PATH')
+s3_client = boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY_ID, aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
 
-# Path to AWS IoT certificates and keys
-AWS_ROOTCA_CERTIFICATE = os.getenv("CAMERA_STREAM_ENV_AWS_ROOTCA_CERTIFICATE")
-AWS_SSL_CERTIFICATE = os.getenv("CAMERA_STREAM_ENV_AWS_SSL_CERTIFICATE")
-AWS_SSL_PRIVATE_KEY = os.getenv("CAMERA_STREAM_ENV_AWS_SSL_PRIVATE_KEY")
-AWS_CLIENT_ID = os.getenv("CAMERA_STREAM_ENV_AWS_CLIENT_ID")
+def upload_to_s3(camera_id, image_bytes):    
+    # Get the current date
+    current_date = datetime.now()
+    # Format the date as "%year%month%day"
+    day_date = current_date.strftime("%Y%m%d")
+    frame_date = current_date.strftime("%Y%m%d-%S-%f")[:-3]  # Remove last 3 digits (microseconds to milliseconds)
 
-YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_ENV_YOLO_MODEL","yolov8n.pt")
+    # Generate a unique filename or key for the S3 object
+    s3_key = f"{S3_MAIN_PATH}/cameras/{day_date}/{camera_id}/images/{frame_date}.jpg"  # Modify this according to your requirement
 
-# Initialize MQTT client
-print(f"MQTT service will publish to {AWS_CLIENT_ID}")
-
-# Define the on_connect callback
-def on_connect(client, userdata, flags, reasonCode, properties=None):
-    if reasonCode == 0:
-        print("Connected to AWS IoT")
-    else:
-        print(f"Failed to connect, return code {reasonCode}")
-
-
-# Define the on_publish callback
-def on_publish(client, userdata, mid):
-    throttled_print(f"Message {mid} has been published.")
-
-
-def on_disconnect(client, userdata, reasonCode, properties=None):
-    print(f"Disconnected, return code {reasonCode}")
-    # Attempt to reconnect
+    # Upload the image bytes to S3
     try:
-        client.reconnect()
+        response = s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=image_bytes)
+        s3_url = f"https://{S3_BUCKET_NAME}.s3.amazonaws.com/{s3_key}"
+        return s3_url
     except Exception as e:
-        print(f"Reconnection failed: {e}")
+        print(f"Failed to upload image to S3: {e}")
+        return None
 
+def upload_image(camera_id, image_bytes):
+    # Upload image to S3
+    s3_url = upload_to_s3(camera_id, image_bytes)
+    if s3_url:
+        throttled_print("Image uploaded successfully to S3:", s3_url)
+    else:
+        print("Failed to upload image to S3.")
 
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=AWS_CLIENT_ID)
-
-# Configure TLS/SSL connection
-client.tls_set(AWS_ROOTCA_CERTIFICATE, certfile=AWS_SSL_CERTIFICATE, keyfile=AWS_SSL_PRIVATE_KEY, tls_version=ssl.PROTOCOL_TLSv1_2)
-client.tls_insecure_set(False)
-
-# Assign the callback functions
-client.on_connect = on_connect
-client.on_publish = on_publish
-client.on_disconnect = on_disconnect
-
-# Connect to AWS IoT
-client.connect(AWS_IOT_ENDPOINT, port=8883)
 
 ##############################################
 # YOLO
 # Initialize YOLO model
+YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_ENV_YOLO_MODEL","yolov8n.pt")
+
 model = YOLO(YOLO_MODEL_PATH)  # Use the correct path to your YOLO model
-
-# Function to publish image to AWS IoT
-def publish_image(camera_id, image_bytes):
-    if not client.is_connected():
-        throttled_print(f"Client not connected, ready to publish an image.")
-    topic = f"cameras/{camera_id}/images"
-    msg_info = client.publish(topic, image_bytes, qos=1)
-
-    # Check if the publish was successful
-    if msg_info.rc == mqtt.MQTT_ERR_SUCCESS:
-        throttled_print(f"Message {msg_info.mid} queued successfully")
-    else:
-        print(f"Failed to queue message, return code: {msg_info.rc}")
-
-    # Wait for the publish to complete
-    msg_info.wait_for_publish()
-    throttled_print("Publish completed")
-
 
 def draw_on(image_bytes,coordinates = ()):
     image = Image.open(BytesIO(image_bytes))
@@ -225,7 +196,7 @@ def video_stream():
         any_camera_seen_person = [current_time < ts for ts in camera_timestamps.values()]
         cur_has_person = current_time < camera_timestamps[camera_id]
         if any_camera_seen_person:
-            publish_image(camera_id, image_bytes)
+            upload_image(camera_id, image_bytes)
             # edit image to see it on the hosted site
             if cur_has_person:
                 image_bytes = draw_on(image_bytes)
@@ -234,7 +205,7 @@ def video_stream():
             # Detect a person in the image and draw bounding boxes
             person_detected, image_with_detections = detect_and_draw(image_bytes)
             if person_detected:
-                publish_image(camera_id, image_bytes)
+                upload_image(camera_id, image_bytes)
                 camera_timestamps[camera_id] = current_time + timedelta(minutes=5)
                 camera_streams[camera_id] = image_with_detections
 
