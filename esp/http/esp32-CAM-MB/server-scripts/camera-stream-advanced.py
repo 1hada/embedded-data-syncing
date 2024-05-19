@@ -85,6 +85,11 @@ def rate_limited(max_per_second):
 def throttled_print(message):
     logger.info(message)
 
+# Example usage
+@rate_limited(60*5)  # Limit to 60seconds*numMinutes
+def upload_fail_throttled_print(message):
+    logger.info(message)
+
 
 ##############################################
 # S3
@@ -107,8 +112,9 @@ def upload_to_s3(camera_id, image_bytes):
     # Upload the image bytes to S3
     try:
         response = s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=image_bytes)
+        return response
     except Exception as e:
-        print(f"Failed to upload image to S3: {e}")
+        upload_fail_throttled_print(f"Failed to upload image to S3: {e}")
         return None
 
 def upload_image(camera_id, image_bytes):
@@ -120,8 +126,6 @@ def upload_image(camera_id, image_bytes):
         bytes_sent += len(image_bytes)
         images_sent += 1
         throttled_print("Image uploaded successfully to S3:", s3_url)
-    else:
-        print("Failed to upload image to S3.")
 
 
 ##############################################
