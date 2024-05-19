@@ -23,6 +23,14 @@ from datetime import datetime, timedelta
 
 import cv2
 import numpy as np
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+
+# Create a logger
+logger = logging.getLogger(__name__)
+
 """
 sudo apt install python3.8-venv -y
 
@@ -75,7 +83,7 @@ def rate_limited(max_per_second):
 # Example usage
 @rate_limited(60*5)  # Limit to 60seconds*numMinutes
 def throttled_print(message):
-    print(message)
+    logger.info(message)
 
 
 ##############################################
@@ -100,7 +108,7 @@ def upload_to_s3(camera_id, image_bytes):
     try:
         response = s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=image_bytes)
     except Exception as e:
-        print(f"Failed to upload image to S3: {e}")
+        logger.info(f"Failed to upload image to S3: {e}")
         return None
 
 def upload_image(camera_id, image_bytes):
@@ -113,7 +121,7 @@ def upload_image(camera_id, image_bytes):
         images_sent += 1
         throttled_print("Image uploaded successfully to S3:", s3_url)
     else:
-        print("Failed to upload image to S3.")
+        logger.info("Failed to upload image to S3.")
 
 
 ##############################################
@@ -123,8 +131,8 @@ YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_ENV_YOLO_MODEL","yolov8n.pt")
 
 model = YOLO(YOLO_MODEL_PATH)  # Use the correct path to your YOLO model
 
-# Function to detect a person in the image using YOLO
-def detect(image_bytes):
+# Function to detect_person a person in the image using YOLO
+def detect_person(image_bytes):
     image = Image.open(BytesIO(image_bytes))
     results = model(image)
     person_detected = False
@@ -135,6 +143,7 @@ def detect(image_bytes):
         confidence = probabilities[class_index]
         if class_name == 'person' and confidence > 0.8:
             person_detected = True
+            logger.info(f"RESULT {result}")
     # Convert the image with detections back to bytes
     return person_detected
 
@@ -173,8 +182,8 @@ def video_stream():
         if any_camera_seen_person:
             upload_image(camera_id, image_bytes)
         else:
-            # Detect a person in the image and draw bounding boxes
-            person_detected = detect(image_bytes)
+            # detect_person a person in the image and draw bounding boxes
+            person_detected = detect_person(image_bytes)
             if person_detected:
                 upload_image(camera_id, image_bytes)
                 camera_timestamps[camera_id] = current_time + timedelta(minutes=5)
