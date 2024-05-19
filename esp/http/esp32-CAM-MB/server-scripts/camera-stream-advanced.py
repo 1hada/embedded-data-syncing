@@ -107,7 +107,7 @@ def on_publish(client, userdata, mid):
     throttled_print(f"Message {mid} has been published.")
 
 
-def on_disconnect(client, userdata, reasonCode):
+def on_disconnect(client, userdata, reasonCode, properties=None):
     print(f"Disconnected, return code {reasonCode}")
     # Attempt to reconnect
     try:
