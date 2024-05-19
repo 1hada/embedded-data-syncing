@@ -108,7 +108,7 @@ def upload_to_s3(camera_id, image_bytes):
     try:
         response = s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=image_bytes)
     except Exception as e:
-        logger.info(f"Failed to upload image to S3: {e}")
+        print(f"Failed to upload image to S3: {e}")
         return None
 
 def upload_image(camera_id, image_bytes):
@@ -121,7 +121,7 @@ def upload_image(camera_id, image_bytes):
         images_sent += 1
         throttled_print("Image uploaded successfully to S3:", s3_url)
     else:
-        logger.info("Failed to upload image to S3.")
+        print("Failed to upload image to S3.")
 
 
 ##############################################
