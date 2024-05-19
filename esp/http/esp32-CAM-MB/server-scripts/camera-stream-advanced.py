@@ -194,7 +194,7 @@ def video_stream():
         camera_streams[camera_id] = frame_data
 
         # Emit the updated frame to all connected clients
-        socketio.emit('frame_update', {'camera_id': camera_id, 'status': 'Person Detected' if cur_camera_seen_person else 'No Person Seen', 'any camera seen person': 'true' if any_camera_seen_person else 'false'})
+        socketio.emit('frame_update', {'camera_id': camera_id, 'status': 'Person Detected' if cur_camera_seen_person else 'No Person Seen', 'any camera seen person': 'true' if any_camera_seen_person else 'false', 'frame':frame_data})
 
         return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
@@ -235,6 +235,10 @@ def display_panels_stream():
             padding: 10px;
             text-align: left;
           }
+          img {
+            max-width: 120px; /* Set maximum width of the image */
+            height: auto; /* Maintain aspect ratio */
+          }
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
       </head>
@@ -254,13 +258,14 @@ def display_panels_stream():
               <td>{{ key }}</td>
               <td id="status-{{ key }}">Default</td>
               <td id="any_camera_seen_person-{{ key }}">Default</td>
+              <td id="frame-{{ key }}">Default</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
         <script>
           var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
-          socket.on('person_detected', function(data) {
+          socket.on('frame_update', function(data) {
             var statusElement = document.getElementById('status-' + data.camera_id);
             if (statusElement) {
               statusElement.textContent = data.status;
@@ -268,6 +273,14 @@ def display_panels_stream():
             var statusElement = document.getElementById('any_camera_seen_person-' + data.camera_id);
             if (statusElement) {
               statusElement.textContent = data.status;
+            }
+            var statusElement = document.getElementById('status-' + data.camera_id);
+            if (statusElement) {
+              statusElement.textContent = data.status;
+            }
+            var imageElement = document.getElementById('image-' + data.camera_id);
+            if (imageElement) {
+              imageElement.src = 'data:image/jpeg;base64,' + data.frame;
             }
           });
         </script>
