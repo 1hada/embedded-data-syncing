@@ -21,7 +21,7 @@ python3 -m venv ~/camera-stream-env
 
 # Activate the virtual environment
 source ~/camera-stream-env/bin/activate
-pip3 install flask flask-socketio eventlet ultralytics
+pip3 install flask flask-socketio eventlet paho-mqtt Flask Pillow ultralytics bobto3
 ```
 
 Create a systemd service file to manage your Python script using a virtual environment. Here's an example:

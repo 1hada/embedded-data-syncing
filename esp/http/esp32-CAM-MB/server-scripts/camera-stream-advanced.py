@@ -11,8 +11,6 @@ from io import BytesIO
 import base64
 import os
 
-
-import ssl
 import time
 from functools import wraps
 import base64
@@ -33,7 +31,7 @@ python3 -m venv ~/camera-stream-env
 
 # Activate the virtual environment
 source ~/camera-stream-env/bin/activate
-pip3 install flask flask-socketio eventlet paho-mqtt Flask Pillow ultralytics
+pip3 install flask flask-socketio eventlet paho-mqtt Flask Pillow ultralytics bobto3
 
 """
 
@@ -83,11 +81,9 @@ def throttled_print(message):
 ##############################################
 # S3
 # Initialize AWS credentials and S3 client
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 S3_BUCKET_NAME = os.getenv('AWS_BUCKET_NAME')
 S3_MAIN_PATH = os.getenv('AWS_MAIN_PATH')
-s3_client = boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY_ID, aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+s3_client = boto3.client('s3')
 
 def upload_to_s3(camera_id, image_bytes):    
     # Get the current date
@@ -274,11 +270,5 @@ def display_panels_stream():
 
 
 if __name__ == '__main__':
-    try:  
-      client.loop_start()
-      # Start the Flask server with SSL
-      socketio.run(app, host='0.0.0.0', port=5000)
-    finally:
-      print("Disconnecting...")
-      client.loop_stop()
-      client.disconnect()
+    # Start the Flask server with SSL
+    socketio.run(app, host='0.0.0.0', port=5000)
