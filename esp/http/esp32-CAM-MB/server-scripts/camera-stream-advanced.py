@@ -57,7 +57,10 @@ CA_PATH = "/path/to/AmazonRootCA1.pem"
 CERT_PATH = "/path/to/certificate.pem.crt"
 KEY_PATH = "/path/to/private.pem.key"
 
-YOLO_MODEL_PATH = 'path/to/yolov5s.pt'
+# Create a new YOLO model from scratch
+model = YOLO("yolov8n.yaml")
+
+YOLO_MODEL_PATH = "yolov8n.pt"
 
 # Initialize MQTT client
 client = mqtt.Client(client_id="your-client-id")
