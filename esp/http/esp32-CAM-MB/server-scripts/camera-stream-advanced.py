@@ -206,7 +206,7 @@ def video_stream():
                 camera_streams[camera_id] = image_with_detections
 
         # Emit the updated frame to all connected clients
-        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': base64.b64encode(image_bytes)})
+        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': frame_data})
 
         return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
