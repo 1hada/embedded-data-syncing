@@ -95,11 +95,12 @@ YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_ENV_YOLO_MODEL","yolov8n.pt")
 print(f"MQTT service will publish to {AWS_CLIENT_ID}")
 
 # Define the on_connect callback
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
+def on_connect(client, userdata, flags, reasonCode, properties=None):
+    if reasonCode == 0:
         print("Connected to AWS IoT")
     else:
-        print(f"Failed to connect, return code {rc}")
+        print(f"Failed to connect, return code {reasonCode}")
+
 
 # Define the on_publish callback
 def on_publish(client, userdata, mid):
