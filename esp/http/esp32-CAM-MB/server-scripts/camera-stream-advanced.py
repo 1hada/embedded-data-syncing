@@ -259,7 +259,7 @@ def display_panels_stream():
           socket.on('frame_update', function(data) {
             var imgElement = document.getElementById('image-' + data.camera_id);
             if (imgElement) {
-              imgElement.src = 'data:image/jpeg:base64,' + data.frame;
+              imgElement.src = 'data:image/jpeg;base64,' + data.frame;
             }
           });
         </script>
