@@ -206,7 +206,7 @@ def video_stream():
                 camera_streams[camera_id] = image_with_detections
 
         # Emit the updated frame to all connected clients
-        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': frame_data})
+        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': image_bytes})
 
         return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
@@ -229,7 +229,7 @@ def display_panels_stream():
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-        <title>Image Panels</title>
+        <title>Video Panels</title>
         <style>
           .panel {
             display: inline-block;
@@ -238,7 +238,7 @@ def display_panels_stream():
             padding: 10px;
             box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
           }
-          img {
+          video {
             max-width: 100%;
             height: auto;
           }
@@ -250,16 +250,16 @@ def display_panels_stream():
           {% for key in camera_streams.keys() %}
             <div class="panel">
               <h3>{{ key }}</h3>
-              <img id="image-{{ key }}" src="" alt="{{ key }}">
+              <video id="video-{{ key }}" autoplay controls></video>
             </div>
           {% endfor %}
         </div>
         <script>
           var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
           socket.on('frame_update', function(data) {
-            var imageElement = document.getElementById('image-' + data.camera_id);
-            if (imageElement) {
-              imageElement.src = 'data:image/jpeg;base64,' + data.frame;
+            var videoElement = document.getElementById('video-' + data.camera_id);
+            if (videoElement) {
+              videoElement.src = 'data:image/jpeg;base64,' + data.frame;
             }
           });
         </script>
