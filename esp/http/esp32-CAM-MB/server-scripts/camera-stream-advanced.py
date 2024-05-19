@@ -250,16 +250,16 @@ def display_panels_stream():
           {% for key in camera_streams.keys() %}
             <div class="panel">
               <h3>{{ key }}</h3>
-              <video id="video-{{ key }}" autoplay controls></video>
+              <img id="image-{{ key }}" src="" alt="{{ key }}">
             </div>
           {% endfor %}
         </div>
         <script>
           var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
           socket.on('frame_update', function(data) {
-            var videoElement = document.getElementById('video-' + data.camera_id);
-            if (videoElement) {
-              videoElement.src = 'data:image/jpeg,' + data.frame;
+            var imgElement = document.getElementById('image-' + data.camera_id);
+            if (imgElement) {
+              imgElement.src = 'data:image/jpeg,' + data.frame;
             }
           });
         </script>
