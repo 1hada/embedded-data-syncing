@@ -250,7 +250,6 @@ def display_panels_stream():
               <th>Camera ID</th>
               <th>Status</th>
               <th>Any Camera Seen Person</th>
-              <th>Image</th>
             </tr>
           </thead>
           <tbody id="status-table">
