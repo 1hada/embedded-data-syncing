@@ -17,6 +17,7 @@ import time
 from PIL import Image
 import paho.mqtt.client as mqtt
 from ultralytics import YOLO
+from datetime import datetime, timedelta
 
 """
 sudo apt install python3.8-venv -y
@@ -36,6 +37,9 @@ socketio = SocketIO(app, async_mode='eventlet')
 
 # Dictionary to store camera streams
 camera_streams = {}
+
+# Track timestamps for each camera
+camera_timestamps = {}
 
 """
 # Redirect HTTP requests to HTTPS
@@ -114,9 +118,21 @@ def video_stream():
         # Store the image bytes in the dictionary
         camera_streams[camera_id] = image_bytes
 
-        # Detect a person in the image
-        if person_detected(image_bytes):
+        # Get current time
+        current_time = datetime.utcnow()
+
+        # Initialize timestamp if not present
+        if camera_id not in camera_timestamps:
+            camera_timestamps[camera_id] = current_time
+
+        # Check if we should skip inference
+        if current_time < camera_timestamps[camera_id]:
             publish_image(camera_id, image_bytes)
+        else:
+            # Detect a person in the image
+            if person_detected(image_bytes):
+                camera_timestamps[camera_id] = current_time + timedelta(minutes=5)
+                publish_image(camera_id, image_bytes)
 
         # Emit the updated frame to all connected clients
         socketio.emit('frame_update', {'camera_id': camera_id, 'frame': frame_data})
