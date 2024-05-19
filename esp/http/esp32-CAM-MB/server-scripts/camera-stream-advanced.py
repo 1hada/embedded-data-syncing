@@ -52,27 +52,22 @@ def redirect_to_https():
         return redirect(url, code=301)
 """
 
-
-
-
 # AWS IoT endpoint, client ID
-AWS_IOT_ENDPOINT = "your-aws-iot-endpoint.amazonaws.com"
+AWS_IOT_ENDPOINT = os.getenv("CAMERA_STREAM_ENV_AWS_IOT_ENDPOINT")
 
 # Path to AWS IoT certificates and keys
-CA_PATH = "/path/to/AmazonRootCA1.pem"
-CERT_PATH = "/path/to/certificate.pem.crt"
-KEY_PATH = "/path/to/private.pem.key"
+AWS_ROOTCA_CERTIFICATE = os.getenv("CAMERA_STREAM_ENV_AWS_ROOTCA_CERTIFICATE")
+AWS_SSL_CERTIFICATE = os.getenv("CAMERA_STREAM_ENV_AWS_SSL_CERTIFICATE")
+AWS_SSL_PRIVATE_KEY = os.getenv("CAMERA_STREAM_ENV_AWS_SSL_PRIVATE_KEY")
+AWS_CLIENT_ID = os.getenv("CAMERA_STREAM_AWS_CLIENT_ID")
 
-# Create a new YOLO model from scratch
-model = YOLO("yolov8n.yaml")
-
-YOLO_MODEL_PATH = "yolov8n.pt"
+YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_YOLO_MODEL","yolov8n.pt")
 
 # Initialize MQTT client
-client = mqtt.Client(client_id="your-client-id")
+client = mqtt.Client(client_id=AWS_CLIENT_ID)
 
 # Configure TLS/SSL connection
-client.tls_set(CA_PATH, certfile=CERT_PATH, keyfile=KEY_PATH, tls_version=ssl.PROTOCOL_TLSv1_2)
+client.tls_set(AWS_ROOTCA_CERTIFICATE, certfile=AWS_SSL_CERTIFICATE, keyfile=AWS_SSL_PRIVATE_KEY, tls_version=ssl.PROTOCOL_TLSv1_2)
 client.tls_insecure_set(False)
 
 # Connect to AWS IoT
@@ -153,7 +148,7 @@ def video_stream():
         camera_streams[camera_id] = image_bytes
 
         # Get current time
-        current_time = datetime.now(datetime.UTC)
+        current_time = datetime.utcnow()# datetime.now(datetime.UTC)
 
         # Initialize timestamp if not present
         if camera_id not in camera_timestamps:
