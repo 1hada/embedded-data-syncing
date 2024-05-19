@@ -252,8 +252,8 @@ def display_panels_stream():
             {% for key in camera_streams.keys() %}
             <tr id="row-{{ key }}">
               <td>{{ key }}</td>
-              <td id="status">Default</td>
-              <td id="any_camera_seen_person">Default</td>
+              <td id="status-{{ key }}">Default</td>
+              <td id="any_camera_seen_person-{{ key }}">Default</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -261,11 +261,11 @@ def display_panels_stream():
         <script>
           var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
           socket.on('person_detected', function(data) {
-            var statusElement = document.getElementById('status');
+            var statusElement = document.getElementById('status-' + data.camera_id);
             if (statusElement) {
               statusElement.textContent = data.status;
             }
-            var statusElement = document.getElementById('any_camera_seen_person');
+            var statusElement = document.getElementById('any_camera_seen_person-' + data.camera_id);
             if (statusElement) {
               statusElement.textContent = data.status;
             }
