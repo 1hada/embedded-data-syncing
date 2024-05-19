@@ -19,6 +19,8 @@ import paho.mqtt.client as mqtt
 from ultralytics import YOLO
 from datetime import datetime, timedelta
 
+import cv2
+import numpy as np
 """
 sudo apt install python3.8-venv -y
 
@@ -86,15 +88,37 @@ def publish_image(camera_id, image_bytes):
     client.publish(topic, image_bytes, qos=1)
     print(f"Published image from camera {camera_id} to topic {topic}")
 
+def draw_on(image_bytes,coordinates = ()):
+    image = Image.open(BytesIO(image_bytes))
+    image_np = np.array(image)
+    x1,y1 = 0,0
+    if len(coordinates):
+      x1,y1,x2,y2 = coordinates
+      # Draw bounding box
+      cv2.rectangle(image_np, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    # Add label
+    label = f"Person"
+    cv2.putText(image_np, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+    _, buffer = cv2.imencode('.jpg', image_np)
+    image_with_detections = buffer.tobytes()
+    return image_with_detections
+    
+
+
 # Function to detect a person in the image using YOLO
-def person_detected(image_bytes):
+def detect_and_draw(image_bytes):
+    image_with_detections = image_bytes
     image = Image.open(BytesIO(image_bytes))
     results = model(image)
+    person_detected = False
     for result in results:
         for pred in result.pred:
             if pred[5] == 'person':  # Adjust this condition based on your model's output format
-                return True
-    return False
+                person_detected = True
+                x1, y1, x2, y2 = int(pred[0]), int(pred[1]), int(pred[2]), int(pred[3])
+                image_with_detections = draw_on(image_bytes,coordinates=(x1, y1, x2, y2))
+    # Convert the image with detections back to bytes
+    return person_detected, image_with_detections
 
 
 @app.route('/hello')
@@ -119,20 +143,29 @@ def video_stream():
         camera_streams[camera_id] = image_bytes
 
         # Get current time
-        current_time = datetime.utcnow()
+        current_time = datetime.now(datetime.UTC)
 
         # Initialize timestamp if not present
         if camera_id not in camera_timestamps:
             camera_timestamps[camera_id] = current_time
 
         # Check if we should skip inference
-        if current_time < camera_timestamps[camera_id]:
+        any_camera_seen_person = [current_time < ts for ts in camera_timestamps.values()]
+        cur_has_person = current_time < camera_timestamps[camera_id]
+        #if any_seen_people or current_time < camera_timestamps[camera_id]:
+        if any_camera_seen_person:
             publish_image(camera_id, image_bytes)
+            # edit image to see it on the hosted site
+            if cur_has_person:
+                image_bytes = draw_on(image_bytes)
+            camera_streams[camera_id] = image_bytes
         else:
-            # Detect a person in the image
-            if person_detected(image_bytes):
-                camera_timestamps[camera_id] = current_time + timedelta(minutes=5)
+            # Detect a person in the image and draw bounding boxes
+            person_detected, image_with_detections = detect_and_draw(image_bytes)
+            if person_detected:
                 publish_image(camera_id, image_bytes)
+                camera_timestamps[camera_id] = current_time + timedelta(minutes=5)
+                camera_streams[camera_id] = image_with_detections
 
         # Emit the updated frame to all connected clients
         socketio.emit('frame_update', {'camera_id': camera_id, 'frame': frame_data})
