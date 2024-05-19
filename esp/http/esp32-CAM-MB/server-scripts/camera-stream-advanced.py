@@ -84,11 +84,9 @@ def publish_image(camera_id, image_bytes):
     print(f"Published image from camera {camera_id} to topic {topic}")
 
 def draw_on(image_bytes,coordinates = ()):
-    print("draw_on 1")
     image = Image.open(BytesIO(image_bytes))
     image_np = np.array(image)
 
-    print("draw on 3")
     if len(coordinates):
       x1,y1,x2,y2 = coordinates
       # Draw bounding box
@@ -105,7 +103,6 @@ def draw_on(image_bytes,coordinates = ()):
     _, buffer = cv2.imencode('.jpg', image_np)
     image_with_detections = buffer.tobytes()
 
-    print("draw on 3")  
     return image_with_detections
     
 
@@ -148,7 +145,7 @@ def video_stream():
         camera_streams[camera_id] = image_bytes
 
         # Get current time
-        current_time = datetime.utcnow()# datetime.now(datetime.UTC)
+        current_time = datetime.utcnow() # datetime.now(datetime.UTC) # had to use deprecated utcnow because the .now() hung
 
         # Initialize timestamp if not present
         if camera_id not in camera_timestamps:
