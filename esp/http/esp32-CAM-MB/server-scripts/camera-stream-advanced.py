@@ -57,6 +57,8 @@ CA_PATH = "/path/to/AmazonRootCA1.pem"
 CERT_PATH = "/path/to/certificate.pem.crt"
 KEY_PATH = "/path/to/private.pem.key"
 
+YOLO_MODEL_PATH = 'path/to/yolov5s.pt'
+
 # Initialize MQTT client
 client = mqtt.Client(client_id="your-client-id")
 
@@ -69,7 +71,7 @@ client.connect(AWS_IOT_ENDPOINT, port=8883)
 client.loop_start()
 
 # Initialize YOLO model
-model = YOLO('path/to/yolov5s.pt')  # Use the correct path to your YOLO model
+model = YOLO(YOLO_MODEL_PATH)  # Use the correct path to your YOLO model
 
 # Function to publish image to AWS IoT
 def publish_image(camera_id, image_bytes):
