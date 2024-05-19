@@ -89,18 +89,28 @@ def publish_image(camera_id, image_bytes):
     print(f"Published image from camera {camera_id} to topic {topic}")
 
 def draw_on(image_bytes,coordinates = ()):
+    print("draw_on 1")
     image = Image.open(BytesIO(image_bytes))
     image_np = np.array(image)
-    x1,y1 = 0,0
+
+    print("draw on 3")
     if len(coordinates):
       x1,y1,x2,y2 = coordinates
       # Draw bounding box
       cv2.rectangle(image_np, (x1, y1), (x2, y2), (0, 255, 0), 2)
     # Add label
     label = f"Person"
-    cv2.putText(image_np, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+    # Add label in the center of the image
+    font_scale = 1.5
+    font_thickness = 2
+    text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+    text_x = (image_np.shape[1] - text_size[0]) // 2
+    text_y = (image_np.shape[0] + text_size[1]) // 2
+    cv2.putText(image_np, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), font_thickness)
     _, buffer = cv2.imencode('.jpg', image_np)
     image_with_detections = buffer.tobytes()
+
+    print("draw on 3")  
     return image_with_detections
     
 
@@ -152,7 +162,6 @@ def video_stream():
         # Check if we should skip inference
         any_camera_seen_person = [current_time < ts for ts in camera_timestamps.values()]
         cur_has_person = current_time < camera_timestamps[camera_id]
-        #if any_seen_people or current_time < camera_timestamps[camera_id]:
         if any_camera_seen_person:
             publish_image(camera_id, image_bytes)
             # edit image to see it on the hosted site
