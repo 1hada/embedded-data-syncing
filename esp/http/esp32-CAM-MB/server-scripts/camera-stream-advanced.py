@@ -169,6 +169,7 @@ def video_stream():
 
         # Check if we should skip inference
         any_camera_seen_person = [current_time < ts for ts in camera_timestamps.values()]
+        cur_camera_seen_person = current_time < camera_timestamps[camera_id]
         if any_camera_seen_person:
             upload_image(camera_id, image_bytes)
         else:
@@ -180,7 +181,7 @@ def video_stream():
         camera_streams[camera_id] = frame_data
 
         # Emit the updated frame to all connected clients
-        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': frame_data})
+        socketio.emit('frame_update', {'camera_id': camera_id, 'status': 'Person Detected' if cur_camera_seen_person else 'No person detected'})
 
         return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
@@ -198,8 +199,7 @@ def serve_image(source):
 @app.route('/data')
 def data_info():
     return f"Images sent {images_sent} Giga Bytes sent {bytes_sent / (1024 ** 3):.2f}"
-
-@app.route('/')
+'/')
 def display_panels_stream():
     html_template = '''
     <!doctype html>
@@ -207,37 +207,46 @@ def display_panels_stream():
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-        <title>Image Panels</title>
+        <title>Camera Stream Status</title>
         <style>
-          .panel {
-            display: inline-block;
-            margin: 10px;
-            border: 1px solid #ccc;
-            padding: 10px;
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+          table {
+            width: 100%;
+            border-collapse: collapse;
           }
-          img {
-            max-width: 100%;
-            height: auto;
+          table, th, td {
+            border: 1px solid black;
+          }
+          th, td {
+            padding: 10px;
+            text-align: left;
           }
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
       </head>
       <body>
-        <div>
-          {% for key in camera_streams.keys() %}
-            <div class="panel">
-              <h3>{{ key }}</h3>
-              <img id="image-{{ key }}" src="" alt="{{ key }}">
-            </div>
-          {% endfor %}
-        </div>
+        <h1>Camera Stream Status</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Camera ID</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="status-table">
+            {% for key in camera_streams.keys() %}
+            <tr id="row-{{ key }}">
+              <td>{{ key }}</td>
+              <td id="status-{{ key }}">No person detected</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
         <script>
           var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
-          socket.on('frame_update', function(data) {
-            var imageElement = document.getElementById('image-' + data.camera_id);
-            if (imageElement) {
-              imageElement.src = 'data:image/jpeg;base64,' + data.frame;
+          socket.on('person_detected', function(data) {
+            var statusElement = document.getElementById('status-' + data.camera_id);
+            if (statusElement) {
+              statusElement.textContent = data.status;
             }
           });
         </script>
@@ -245,7 +254,6 @@ def display_panels_stream():
     </html>
     '''
     return render_template_string(html_template, camera_streams=camera_streams)
-
 
 if __name__ == '__main__':
     # Start the Flask server with SSL
