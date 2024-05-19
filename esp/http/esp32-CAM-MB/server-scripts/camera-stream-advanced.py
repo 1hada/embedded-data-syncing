@@ -199,7 +199,9 @@ def serve_image(source):
 @app.route('/data')
 def data_info():
     return f"Images sent {images_sent} Giga Bytes sent {bytes_sent / (1024 ** 3):.2f}"
-'/')
+
+
+@app.route('/')
 def display_panels_stream():
     html_template = '''
     <!doctype html>
