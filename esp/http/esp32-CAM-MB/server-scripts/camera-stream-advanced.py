@@ -194,7 +194,7 @@ def video_stream():
         camera_streams[camera_id] = frame_data
 
         # Emit the updated frame to all connected clients
-        socketio.emit('frame_update', {'camera_id': camera_id, 'status': 'Person Detected' if cur_camera_seen_person else 'No person detected'})
+        socketio.emit('frame_update', {'camera_id': camera_id, f'status-{camera_id}': 'Person Detected' if cur_camera_seen_person else 'any_camera_seen_person'}, f'any camera seen person-{camera_id}': 'true' if any_camera_seen_person else)
 
         return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
@@ -245,13 +245,15 @@ def display_panels_stream():
             <tr>
               <th>Camera ID</th>
               <th>Status</th>
+              <th>Any Camera Seen Person</th>
             </tr>
           </thead>
           <tbody id="status-table">
             {% for key in camera_streams.keys() %}
             <tr id="row-{{ key }}">
               <td>{{ key }}</td>
-              <td id="status-{{ key }}">No person detected</td>
+              <td id="status-{{ key }}">Default</td>
+              <td id="any_camera_seen_person-{{ key }}">Default</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -260,6 +262,10 @@ def display_panels_stream():
           var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
           socket.on('person_detected', function(data) {
             var statusElement = document.getElementById('status-' + data.camera_id);
+            if (statusElement) {
+              statusElement.textContent = data.status;
+            }
+            var statusElement = document.getElementById('any_camera_seen_person-' + data.camera_id);
             if (statusElement) {
               statusElement.textContent = data.status;
             }
