@@ -107,6 +107,10 @@ def on_publish(client, userdata, mid):
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=AWS_CLIENT_ID)
 
+# Configure TLS/SSL connection
+client.tls_set(AWS_ROOTCA_CERTIFICATE, certfile=AWS_SSL_CERTIFICATE, keyfile=AWS_SSL_PRIVATE_KEY, tls_version=ssl.PROTOCOL_TLSv1_2)
+client.tls_insecure_set(False)
+
 # Assign the callback functions
 client.on_connect = on_connect
 client.on_publish = on_publish
@@ -119,10 +123,10 @@ client.connect(AWS_IOT_ENDPOINT, port=8883)
 # Initialize YOLO model
 model = YOLO(YOLO_MODEL_PATH)  # Use the correct path to your YOLO model
 
-
-
 # Function to publish image to AWS IoT
 def publish_image(camera_id, image_bytes):
+    if not client.is_connected():
+        throttled_print(f"Client not connected, ready to publish an image.")
     topic = f"cameras/{camera_id}/images"
     msg_info = client.publish(topic, image_bytes, qos=1)
 
