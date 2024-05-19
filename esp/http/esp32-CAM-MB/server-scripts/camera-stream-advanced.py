@@ -104,7 +104,17 @@ def on_connect(client, userdata, flags, reasonCode, properties=None):
 
 # Define the on_publish callback
 def on_publish(client, userdata, mid):
-    print(f"Message {mid} has been published.")
+    throttled_print(f"Message {mid} has been published.")
+
+
+def on_disconnect(client, userdata, reasonCode):
+    print(f"Disconnected, return code {reasonCode}")
+    # Attempt to reconnect
+    try:
+        client.reconnect()
+    except Exception as e:
+        print(f"Reconnection failed: {e}")
+
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=AWS_CLIENT_ID)
 
@@ -115,6 +125,7 @@ client.tls_insecure_set(False)
 # Assign the callback functions
 client.on_connect = on_connect
 client.on_publish = on_publish
+client.on_disconnect = on_disconnect
 
 # Connect to AWS IoT
 client.connect(AWS_IOT_ENDPOINT, port=8883)
