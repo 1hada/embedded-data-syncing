@@ -10,6 +10,54 @@
 1. Install the required libraries for mDNS/DNS-SD support on ESP32 using the Arduino IDE or PlatformIO.
 2. Write code to discover the server using mDNS/DNS-SD. See `main.cpp`
 
+## Step 2: Setup server to Run on Boot
+
+create a venv
+```
+sudo apt install python3.8-venv -y
+
+# Create a virtual environment named "camera-stream-env" in the home directory
+python3 -m venv ~/camera-stream-env
+
+# Activate the virtual environment
+source ~/camera-stream-env/bin/activate
+pip3 install flask flask-socketio eventlet ultralytics
+```
+
+Create a systemd service file to manage your Python script using a virtual environment. Here's an example:
+
+```plaintext
+[Unit]
+Description=Camera Stream Service
+After=network.target
+
+[Service]
+User=<your_username>
+Group=<your_group>
+WorkingDirectory=/path/to/your/script
+Environment="PATH=/home/<your_username>/camera-stream-env/bin"
+ExecStart=/home/<your_username>/camera-stream-env/bin/python /bin/camera-stream
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Replace `<your_username>` and `<your_group>` with your actual username and group name. Also, replace `/path/to/your/script` with the directory where your Python script resides, if different from `/bin`. Ensure to adjust the paths accordingly.
+
+Save this content in a file with a `.service` extension, for example, `camera-stream.service`, and place it in the `/etc/systemd/system/` directory. Then, you can enable and start the service with the following commands:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable camera-stream
+sudo systemctl start camera-stream
+```
+
+This will create a systemd service named `camera-stream` that will start your Python script using the specified virtual environment. Adjust the paths and configuration to match your setup.
+
+
+
+# TODO
 ## Step 2: Set Up Certificate for HTTPS
 
 > Note : if the server or client's IP address changes frequently (e.g., due to dynamic IP assignment by the ISP), you may face challenges with domain validation when obtaining SSL/TLS certificates from Certificate Authorities (CAs). Many CAs require domain validation to ensure that the entity requesting the certificate has control over the domain.
