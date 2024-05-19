@@ -250,6 +250,7 @@ def display_panels_stream():
               <th>Camera ID</th>
               <th>Status</th>
               <th>Any Camera Seen Person</th>
+              <th>Image</th>
             </tr>
           </thead>
           <tbody id="status-table">
@@ -258,7 +259,7 @@ def display_panels_stream():
               <td>{{ key }}</td>
               <td id="status-{{ key }}">Default</td>
               <td id="any_camera_seen_person-{{ key }}">Default</td>
-              <td id="frame-{{ key }}">Default</td>
+              <td id="image-{{ key }}">Default</td>
             </tr>
             {% endfor %}
           </tbody>
