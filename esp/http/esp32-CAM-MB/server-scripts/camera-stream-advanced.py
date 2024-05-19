@@ -5,7 +5,7 @@ pip3 install flask flask-socketio eventlet
 chmod +x camera-stream.py
 sudo mv camera-stream.py /bin/camera-stream
 """
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 from io import BytesIO
 import base64
