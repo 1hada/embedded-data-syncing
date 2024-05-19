@@ -129,9 +129,12 @@ def detect(image_bytes):
     results = model(image)
     person_detected = False
     for result in results:
-        for pred in result.pred:
-            if pred[5] == 'person':  # Adjust this condition based on your model's output format
-                person_detected = True
+        probabilities = result.probs.numpy().data
+        class_index = probabilities.argmax()  # Get the index with the highest prob
+        class_name = model.names[class_index]  # Map the index to the class name
+        confidence = probabilities[class_index]
+        if class_name == 'person' and confidence > 0.8:
+            person_detected = True
     # Convert the image with detections back to bytes
     return person_detected
 
