@@ -238,7 +238,7 @@ def display_panels_stream():
             padding: 10px;
             box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
           }
-          video {
+          img {
             max-width: 100%;
             height: auto;
           }
@@ -259,7 +259,7 @@ def display_panels_stream():
           socket.on('frame_update', function(data) {
             var videoElement = document.getElementById('video-' + data.camera_id);
             if (videoElement) {
-              videoElement.src = 'data:image/jpeg;base64,' + data.frame;
+              videoElement.src = 'data:image/jpeg,' + data.frame;
             }
           });
         </script>
