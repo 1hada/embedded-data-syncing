@@ -5,8 +5,9 @@ pip3 install flask
 chmod +x camera-stream.py
 sudo mv camera-stream.py /bin/camera-stream
 """
-from flask import Flask, Response, request, redirect, send_file, render_template_string
+from flask import Flask, Response, request, send_file, render_template_string,jsonify
 from io import BytesIO
+import base64
 
 import os
 """
@@ -38,34 +39,25 @@ def index():
 
 @app.route('/video_stream', methods=['POST'])
 def video_stream():
-    # Get the camera ID from the request
-    camera_id = request.headers.get('X-Camera-ID')
-    
-    # Get the frame data from the request
-    frame_data = request.form.get('frame')
+    try:
+        # Parse the JSON data from the request
+        data = request.get_json()
+        camera_id = data.get('camera_id')
+        frame_data = data.get('frame')
 
-    try :
-        # Decode base64-encoded frame data
-        frame_bytes = base64.b64decode(frame_data)
+        if not camera_id or not frame_data:
+            return jsonify({'error': 'Invalid payload'}), 400
 
-        # Store the frame data in the dictionary
-        camera_streams[camera_id] = frame_bytes
-        return 'Frame received for camera {}'.format(camera_id)
+        # Decode the base64 frame data
+        image_bytes = base64.b64decode(frame_data)
+
+        # Store the image bytes in the dictionary
+        camera_streams[camera_id] = image_bytes
+        return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
-        print(f"Invalid post due to {e}")
-        return f"Exception with request {e}"
-
-@app.route('/stream/<string:camera_id>')
-def stream(camera_id):
-    # Check if camera ID exists in the dictionary
-    if camera_id in camera_streams:
-        # Send the stored frame data as response
-        return Response(camera_streams[camera_id], mimetype='image/jpeg')
-    else:
-        return 'Camera {} not found'.format(camera_id)
+        return jsonify({'error': str(e)}), 400
 
 
-# Route to serve images
 @app.route('/image/<source>')
 def serve_image(source):
     image_bytes = camera_streams.get(source)
@@ -74,7 +66,6 @@ def serve_image(source):
     else:
         return "Image not found", 404
 
-# Route to display image panels
 @app.route('/')
 def display_panels():
     html_template = '''

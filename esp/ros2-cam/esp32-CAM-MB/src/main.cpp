@@ -46,8 +46,6 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
-#include <PubSubClient.h>
-
 #include "secrets.h"
 #include "hardware_constants.h"
 
@@ -72,26 +70,6 @@ String server_url = "https://your_ubuntu_server_ip/video_stream";
 bool server_found = false;
 // Use WiFiClientSecure for HTTPS
 WiFiClientSecure client;
-PubSubClient mqttClient(client);
-bool mqtt_setup_required = true;
-
-// Function to connect to MQTT broker
-void reconnect()
-{
-  while (!mqttClient.connected())
-  {
-    if (mqttClient.connect("ESP32Client"))
-    {
-      Serial.println("Connected to MQTT Broker");
-      mqtt_setup_required = true;
-    }
-    else
-    {
-      Serial.print("Failed to connect to MQTT Broker, retrying in 5 seconds...");
-      delay(5000);
-    }
-  }
-}
 
 void captureAndPublishImage(void *parameter)
 {
@@ -107,28 +85,14 @@ void captureAndPublishImage(void *parameter)
         continue;
       }
 
-      if (mqtt_setup_required)
-      {
-
-        // Connect to MQTT Broker
-        client.setCACert(rootCA);
-        client.setCertificate(server_crt);
-        client.setPrivateKey(server_key);
-        client.setServer(mqtt_server, 8883);
-        reconnect();
-      }
       // Send the frame to the server
-      // FOR TESTING sendFrameToServerHttps(fb->buf, fb->len);
-
-      // Publish camera frame as MQTT message
-      mqttClient.publish("camera", (char *)fb->buf, fb->len);
-
+      sendFrameToServerHttps(fb->buf, fb->len);
       // Release the frame buffer
       esp_camera_fb_return(fb);
     }
 
     // Delay for next capture
-    vTaskDelay(pdMS_TO_TICKS(5000)); // Delay for 1000 milliseconds (1 second)
+    vTaskDelay(pdMS_TO_TICKS(4)); // Delay for 1000 milliseconds (1 second)
   }
 }
 
@@ -144,54 +108,45 @@ void sendFrameToServerHttps(uint8_t *data, size_t len)
   client.setCertificate(CERT_CRT);
   client.setPrivateKey(CERT_PRIVATE);
   */
+
   WiFiClient client;
 
   // Connect to the server
   // WiFiClientSecure::connect(IPAddress ip, uint16_t port, const char *CA_cert, const char *cert, const char *private_key)
-  // if (!client.connect(ip, MDNS_PORT))
-  if (!client.connect(ip, MDNS_PORT, CERT_CA, CERT_CRT, CERT_PRIVATE))
+  if (!client.connect(ip, MDNS_PORT))
   {
     Serial.println("Connection to server failed");
     return;
   }
-
   // Base64 encode the frame data
   String frameData = base64::encode(data, len);
+
+  // Construct the JSON object
+  String jsonPayload = "{\"camera_id\": \"" + String(SOURCE_ID) + "\", \"frame\": \"" + frameData + "\"}";
 
   // Set up the HTTPS request headers
   String headers = "POST /video_stream HTTP/1.1\r\n";
   headers += "Host: " + String(server_url) + "\r\n";
-  headers += "Content-Type: application/x-www-form-urlencoded\r\n";
-  headers += "Content-Length: " + String(frameData.length()) + "\r\n";
-  headers += "X-Camera-ID: " + String(SOURCE_ID) + "\r\n";
+  headers += "Content-Type: application/json\r\n";
+  headers += "Content-Length: " + String(jsonPayload.length()) + "\r\n";
   headers += "\r\n";
 
-  // Send the HTTP request
+  // Send the HTTP request headers
   client.print(headers);
-  client.print("frame=");
-  client.print(frameData);
+
+  // Send the JSON payload
+  client.print(jsonPayload);
+
+  // Ensure the request is properly closed
   client.println("");
 
-  // Wait for server response
-  // Capture the start time
-  TickType_t startTime = xTaskGetTickCount();
-  TickType_t timeout_period_ms = 5000; // 5000 milliseconds (5 seconds)
-  while (client.connected())
+  // Optionally, print the server response
+  while (client.connected() && client.available())
   {
     if (client.available())
     {
       String line = client.readStringUntil('\r');
       Serial.print(line);
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000)); // Delay for 1000 milliseconds (1 second)
-
-    // Calculate the elapsed time
-    TickType_t elapsedTime = xTaskGetTickCount() - startTime;
-    // Check if the elapsed time has exceeded the timeout period
-    if (elapsedTime > pdMS_TO_TICKS(timeout_period_ms))
-    {
-      Serial.print("Timeout occurred, breaking the loop.");
-      break;
     }
   }
   client.stop();
