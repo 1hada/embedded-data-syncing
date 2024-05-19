@@ -99,13 +99,13 @@ def upload_to_s3(camera_id, image_bytes):
     # Upload the image bytes to S3
     try:
         response = s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=image_bytes)
-        s3_url = f"https://{S3_BUCKET_NAME}.s3.amazonaws.com/{s3_key}"
-        return s3_url
     except Exception as e:
         print(f"Failed to upload image to S3: {e}")
         return None
 
 def upload_image(camera_id, image_bytes):
+    global bytes_sent, images_sent
+
     # Upload image to S3
     s3_url = upload_to_s3(camera_id, image_bytes)
     if s3_url:
