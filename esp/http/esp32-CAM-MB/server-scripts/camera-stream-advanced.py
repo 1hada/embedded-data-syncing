@@ -93,7 +93,6 @@ YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_ENV_YOLO_MODEL","yolov8n.pt")
 
 # Initialize MQTT client
 print(f"MQTT service will publish to {AWS_CLIENT_ID}")
-client = mqtt.Client(client_id=AWS_CLIENT_ID)
 
 # Define the on_connect callback
 def on_connect(client, userdata, flags, rc):
@@ -105,6 +104,8 @@ def on_connect(client, userdata, flags, rc):
 # Define the on_publish callback
 def on_publish(client, userdata, mid):
     print(f"Message {mid} has been published.")
+
+client = mqtt.Client(client_id=AWS_CLIENT_ID)
 
 # Assign the callback functions
 client.on_connect = on_connect
