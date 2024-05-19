@@ -259,8 +259,11 @@ def display_panels_stream():
               <td>{{ key }}</td>
               <td id="status-{{ key }}">Default</td>
               <td id="any_camera_seen_person-{{ key }}">Default</td>
-              <img id="image-{{ key }}" src="" alt="{{ key }}">
             </tr>
+            <div class="panel">
+              <h3>{{ key }}</h3>
+              <img id="image-{{ key }}" src="" alt="{{ key }}">
+            </div>
             {% endfor %}
           </tbody>
         </table>
@@ -273,11 +276,7 @@ def display_panels_stream():
             }
             var statusElement = document.getElementById('any_camera_seen_person-' + data.camera_id);
             if (statusElement) {
-              statusElement.textContent = data.status;
-            }
-            var statusElement = document.getElementById('status-' + data.camera_id);
-            if (statusElement) {
-              statusElement.textContent = data.status;
+              statusElement.textContent = data.any_camera_seen_person;
             }
             var imageElement = document.getElementById('image-' + data.camera_id);
             if (imageElement) {
