@@ -14,6 +14,8 @@ import os
 
 import ssl
 import time
+from functools import wraps
+
 from PIL import Image
 import paho.mqtt.client as mqtt
 from ultralytics import YOLO
@@ -52,6 +54,32 @@ def redirect_to_https():
         return redirect(url, code=301)
 """
 
+##############################################
+# logging
+
+def rate_limited(max_per_second):
+    min_interval = 1.0 / float(max_per_second)
+    def decorator(func):
+        last_time_called = [0.0]
+        @wraps(func)
+        def rate_limited_function(*args, **kwargs):
+            elapsed = time.time() - last_time_called[0]
+            left_to_wait = min_interval - elapsed
+            if left_to_wait > 0:
+                time.sleep(left_to_wait)
+            last_time_called[0] = time.time()
+            return func(*args, **kwargs)
+        return rate_limited_function
+    return decorator
+
+# Example usage
+@rate_limited(60*5)  # Limit to 60seconds*numMinutes
+def throttled_print(message):
+    print(message)
+
+
+##############################################
+# MQTT
 # AWS IoT endpoint, client ID
 AWS_IOT_ENDPOINT = os.getenv("CAMERA_STREAM_ENV_AWS_IOT_ENDPOINT")
 
@@ -64,24 +92,50 @@ AWS_CLIENT_ID = os.getenv("CAMERA_STREAM_AWS_CLIENT_ID")
 YOLO_MODEL_PATH = os.getenv("CAMERA_STREAM_YOLO_MODEL","yolov8n.pt")
 
 # Initialize MQTT client
+print(f"MQTT service will publish to {AWS_CLIENT_ID}")
 client = mqtt.Client(client_id=AWS_CLIENT_ID)
 
-# Configure TLS/SSL connection
-client.tls_set(AWS_ROOTCA_CERTIFICATE, certfile=AWS_SSL_CERTIFICATE, keyfile=AWS_SSL_PRIVATE_KEY, tls_version=ssl.PROTOCOL_TLSv1_2)
-client.tls_insecure_set(False)
+# Define the on_connect callback
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print("Connected to AWS IoT")
+    else:
+        print(f"Failed to connect, return code {rc}")
+
+# Define the on_publish callback
+def on_publish(client, userdata, mid):
+    print(f"Message {mid} has been published.")
+
+# Assign the callback functions
+client.on_connect = on_connect
+client.on_publish = on_publish
 
 # Connect to AWS IoT
 client.connect(AWS_IOT_ENDPOINT, port=8883)
 client.loop_start()
 
+##############################################
+# YOLO
 # Initialize YOLO model
 model = YOLO(YOLO_MODEL_PATH)  # Use the correct path to your YOLO model
+
+
 
 # Function to publish image to AWS IoT
 def publish_image(camera_id, image_bytes):
     topic = f"cameras/{camera_id}/images"
-    client.publish(topic, image_bytes, qos=1)
-    print(f"Published image from camera {camera_id} to topic {topic}")
+    msg_info = client.publish(topic, image_bytes, qos=1)
+
+    # Check if the publish was successful
+    if msg_info.rc == mqtt.MQTT_ERR_SUCCESS:
+        throttled_print(f"Message {msg_info.mid} queued successfully")
+    else:
+        print(f"Failed to queue message, return code: {msg_info.rc}")
+
+    # Wait for the publish to complete
+    msg_info.wait_for_publish()
+    throttled_print("Publish completed")
+
 
 def draw_on(image_bytes,coordinates = ()):
     image = Image.open(BytesIO(image_bytes))
