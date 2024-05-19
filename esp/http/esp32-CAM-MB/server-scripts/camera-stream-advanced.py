@@ -206,7 +206,7 @@ def video_stream():
                 camera_streams[camera_id] = image_with_detections
 
         # Emit the updated frame to all connected clients
-        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': image_bytes})
+        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': base64.b64encode(image_bytes)})
 
         return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
@@ -259,7 +259,7 @@ def display_panels_stream():
           socket.on('frame_update', function(data) {
             var imgElement = document.getElementById('image-' + data.camera_id);
             if (imgElement) {
-              imgElement.src = 'data:image/jpeg,' + data.frame;
+              imgElement.src = 'data:image/jpeg:base64,' + data.frame;
             }
           });
         </script>
