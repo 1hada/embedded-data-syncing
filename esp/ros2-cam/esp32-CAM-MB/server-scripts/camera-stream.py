@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
 
 """
-pip3 install flask
+pip3 install flask flask-socketio eventlet
+
 chmod +x camera-stream.py
 sudo mv camera-stream.py /bin/camera-stream
 """
-from flask import Flask, Response, request, send_file, render_template_string,jsonify
+from flask import Flask, render_template_string, request, jsonify
+from flask_socketio import SocketIO, emit
 from io import BytesIO
 import base64
-
 import os
-"""
-sudo apt update
-sudo apt install mosquitto mosquitto-clients -y
-sudo snap install mosquitto
-sudo systemctl start mosquitto
-"""
-def on_message(client, userdata, message):
-    print(f"Received message: {message.payload.decode()}")
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, async_mode='eventlet')
 
 # Dictionary to store camera streams
 camera_streams = {}
@@ -53,6 +48,10 @@ def video_stream():
 
         # Store the image bytes in the dictionary
         camera_streams[camera_id] = image_bytes
+
+        # Emit the updated frame to all connected clients
+        socketio.emit('frame_update', {'camera_id': camera_id, 'frame': frame_data})
+
         return jsonify({'message': 'Image uploaded successfully', 'camera_id': camera_id}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -65,9 +64,9 @@ def serve_image(source):
         return send_file(BytesIO(image_bytes), mimetype='image/jpeg')
     else:
         return "Image not found", 404
-
+    
 @app.route('/')
-def display_panels():
+def display_panels_stream():
     html_template = '''
     <!doctype html>
     <html lang="en">
@@ -88,31 +87,30 @@ def display_panels():
             height: auto;
           }
         </style>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
       </head>
       <body>
         <div>
           {% for key in camera_streams.keys() %}
             <div class="panel">
               <h3>{{ key }}</h3>
-              <img src="/image/{{ key }}" alt="{{ key }}">
+              <img id="image-{{ key }}" src="" alt="{{ key }}">
             </div>
           {% endfor %}
         </div>
+        <script>
+          var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
+          socket.on('frame_update', function(data) {
+            var imageElement = document.getElementById('image-' + data.camera_id);
+            if (imageElement) {
+              imageElement.src = 'data:image/jpeg;base64,' + data.frame;
+            }
+          });
+        </script>
       </body>
     </html>
     '''
     return render_template_string(html_template, camera_streams=camera_streams)
-
-
-@app.route('/stream_basic')
-def stream_basic():
-    camera_id = "source_1"
-    # Check if camera ID exists in the dictionary
-    if camera_id in camera_streams:
-        # Send the stored frame data as response
-        return Response(camera_streams[camera_id], mimetype='image/jpeg')
-    else:
-        return 'Camera {} not found'.format(camera_id)
 
 
 if __name__ == '__main__':
@@ -120,5 +118,5 @@ if __name__ == '__main__':
     app.config['SSL_CERTIFICATE'] = os.environ.get('SSL_CERTIFICATE')
     app.config['SSL_PRIVATE_KEY'] = os.environ.get('SSL_PRIVATE_KEY')
     
-    # Run Flask app with SSL/TLS
-    app.run(host='0.0.0.0', port=5000)#, ssl_context=(app.config['SSL_CERTIFICATE'], app.config['SSL_PRIVATE_KEY']))
+    # Start the Flask server with SSL
+    socketio.run(app, host='0.0.0.0', port=5000)
