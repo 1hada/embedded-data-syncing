@@ -19,7 +19,7 @@ struct AppState {
     tx: broadcast::Sender<(String, Vec<u8>)>,
 }
 
-#[get("/frames/{camera_id}")]
+#[get("/frame/{camera_id}")]
 async fn get_frame(data: web::Data<AppState>, path: web::Path<String>) -> impl Responder {
     let camera_id = path.into_inner();
     println!("Client connected for frame stream: {}", camera_id);
