@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Streams</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            border: 1px solid black;
+            padding: 10px;
+            text-align: center;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Camera Streams</h1>
+    <table id="cameraTable">
+        <thead>
+            <tr>
+                <th>Camera ID</th>
+                <th>Stream</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Camera rows will be added here -->
+        </tbody>
+    </table>
+
+    <script>
+        const cameraIds = ["camera_1", "camera_2"]; // Add camera IDs here
+
+        function addCameraRow(cameraId) {
+            const tableBody = document.getElementById('cameraTable').getElementsByTagName('tbody')[0];
+            const newRow = tableBody.insertRow();
+            const cellId = newRow.insertCell(0);
+            const cellStream = newRow.insertCell(1);
+            cellId.textContent = cameraId;
+            const img = document.createElement('img');
+            img.id = `stream_${cameraId}`;
+            cellStream.appendChild(img);
+        }
+
+        function updateStream(cameraId) {
+            const img = document.getElementById(`stream_${cameraId}`);
+            img.src = `/frames/${cameraId}?t=${new Date().getTime()}`; // Add timestamp to prevent caching
+        }
+
+        function startStreaming() {
+            cameraIds.forEach(cameraId => {
+                addCameraRow(cameraId);
+                setInterval(() => updateStream(cameraId), 1000); // Update every second
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', startStreaming);
+    </script>
+</body>
+
+</html>
