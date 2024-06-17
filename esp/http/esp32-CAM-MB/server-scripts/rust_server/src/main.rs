@@ -53,7 +53,9 @@ async fn handle_request(
             let frame_bytes = decode(&frame_data.frame).unwrap();
 
             let mut store = frame_store.lock().unwrap();
-            store.insert(frame_data.camera_id, frame_bytes);
+            store.insert(frame_data.camera_id.clone(), frame_bytes.clone());
+
+            println!("Received frame from camera: {}", frame_data.camera_id);
 
             Ok(Response::new(Body::from("Frame received")))
         }
