@@ -1,72 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Camera Streams</title>
-    <style>
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        th,
-        td {
-            border: 1px solid black;
-            padding: 10px;
-            text-align: center;
-        }
-
-        img {
-            max-width: 100%;
-            height: auto;
-        }
-    </style>
+    <title>Webcam Streams</title>
 </head>
-
 <body>
-    <h1>Camera Streams</h1>
-    <table id="cameraTable">
-        <thead>
-            <tr>
-                <th>Camera ID</th>
-                <th>Stream</th>
-            </tr>
-        </thead>
-        <tbody>
-            <!-- Camera rows will be added here -->
-        </tbody>
+    <table>
+        <tr>
+            <td><img src="/video/source_1" alt="Source 1"></td>
+            <td><img src="/video/source_2" alt="Source 2"></td>
+        </tr>
+        <tr>
+            <td><img src="/video/source_3" alt="Source 3"></td>
+            <td><img src="/video/source_4" alt="Source 4"></td>
+        </tr>
     </table>
-
-    <script>
-        const cameraIds = ["source_1", "camera_2", "source_3", "camera_4"]; // Add camera IDs here
-
-        function addCameraRow(cameraId) {
-            const tableBody = document.getElementById('cameraTable').getElementsByTagName('tbody')[0];
-            const newRow = tableBody.insertRow();
-            const cellId = newRow.insertCell(0);
-            const cellStream = newRow.insertCell(1);
-            cellId.textContent = cameraId;
-            const img = document.createElement('img');
-            img.id = `stream_${cameraId}`;
-            cellStream.appendChild(img);
-        }
-
-        function updateStream(cameraId) {
-            const img = document.getElementById(`stream_${cameraId}`);
-            img.src = `/frames/${cameraId}?t=${new Date().getTime()}`; // Add timestamp to prevent caching
-        }
-
-        function startStreaming() {
-            cameraIds.forEach(cameraId => {
-                addCameraRow(cameraId);
-                setInterval(() => updateStream(cameraId), 1000); // Update every second
-            });
-        }
-
-        document.addEventListener('DOMContentLoaded', startStreaming);
-    </script>
 </body>
-
 </html>
+
