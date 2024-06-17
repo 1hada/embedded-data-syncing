@@ -1,8 +1,10 @@
 use base64::decode;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use local_ip_address::local_ip;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 
@@ -21,13 +23,15 @@ async fn main() {
     let make_svc = make_service_fn(move |_| {
         let frame_store = Arc::clone(&frame_store);
         async move {
-            Ok::<_, hyper::Error>(service_fn(move |req| {
+            Ok::<_, Infallible>(service_fn(move |req| {
                 handle_request(req, Arc::clone(&frame_store))
             }))
         }
     });
 
-    let addr = ([127,0,0,1], 5000).into();
+    // Get the local IP address
+    let local_ip = local_ip().unwrap();
+    let addr = (local_ip, 5000).into();
 
     let server = Server::bind(&addr).serve(make_svc);
 
