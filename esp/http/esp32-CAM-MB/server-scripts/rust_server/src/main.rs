@@ -1,99 +1,64 @@
-use base64::decode;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
-use local_ip_address::local_ip;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::sync::{Arc, Mutex};
-use tokio::runtime::Runtime;
+//mod server;
+//mod mdns_discovery;
+//use crate::mdns_discovery::CameraFinder;
 
-#[derive(Serialize, Deserialize)]
-struct FrameData {
-    camera_id: String,
-    frame: String,
-}
-
-type FrameStore = Arc<Mutex<HashMap<String, Vec<u8>>>>;
-
+/*
 #[tokio::main]
 async fn main() {
-    let frame_store: FrameStore = Arc::new(Mutex::new(HashMap::new()));
+    let mut camera_finder = mdns_discovery::CameraFinder::new();
 
-    let make_svc = make_service_fn(move |_| {
-        let frame_store = Arc::clone(&frame_store);
-        async move {
-            Ok::<_, Infallible>(service_fn(move |req| {
-                handle_request(req, Arc::clone(&frame_store))
-            }))
-        }
-    });
+    // Start mDNS discovery and update the camera IPs
+    camera_finder.discover_cameras();
 
-    // Get the local IP address
-    let local_ip = local_ip().unwrap();
-    let addr = (local_ip, 5000).into();
-
-    let server = Server::bind(&addr).serve(make_svc);
-
-    println!("Server running on http://{}", addr);
-
-    if let Err(e) = server.await {
-        eprintln!("Server error: {}", e);
-    }
+    // Start the HTTP server, passing the camera finder
+    server::start_server(camera_finder).await;
 }
 
-async fn handle_request(
-    req: Request<Body>,
-    frame_store: FrameStore,
-) -> Result<Response<Body>, hyper::Error> {
-    match (req.method(), req.uri().path()) {
-        (&Method::POST, "/video_stream") => {
-            let whole_body = hyper::body::to_bytes(req.into_body()).await?;
-            let frame_data: FrameData = serde_json::from_slice(&whole_body).unwrap();
-            let frame_bytes = decode(&frame_data.frame).unwrap();
 
-            let mut store = frame_store.lock().unwrap();
-            store.insert(frame_data.camera_id.clone(), frame_bytes.clone());
 
-            println!("Received frame from camera: {}", frame_data.camera_id);
 
-            Ok(Response::new(Body::from("Frame received")))
-        }
-        (&Method::GET, path) if path.starts_with("/video/source_") => {
-            let source_id = path.trim_start_matches("/video/source_").to_string();
+fn main() {
+    let mut camera_finder = CameraFinder::new();
+    
+    // Optionally discover all cameras
+    //camera_finder.discover_cameras();
+    
+    // Resolve a specific camera by hostname
+    let hostname = "source_1";
+    match camera_finder.resolve_hostname(hostname) {
+        Some(ip) => println!("Resolved {} to IP: {}", hostname, ip),
+        None => println!("Failed to resolve {}", hostname),
+    }
+}
+*/
 
-            let store = frame_store.lock().unwrap();
-            if let Some(frame) = store.get(&source_id) {
-                let response = Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "image/jpeg")
-                    .body(Body::from(frame.clone()))
-                    .unwrap();
-                Ok(response)
-            } else {
-                let response = Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::from("Not Found"))
-                    .unwrap();
-                Ok(response)
+use mdns_sd::{ServiceDaemon, ServiceEvent};
+fn main() {
+
+    // Create a daemon
+    let mdns = ServiceDaemon::new().expect("Failed to create daemon");
+    
+    // Browse for a service type.
+    let service_type = "_http._tcp.local.";
+    let receiver = mdns.browse(service_type).expect("Failed to browse");
+    
+    // Receive the browse events in sync or async. Here is
+    // an example of using a thread. Users can call `receiver.recv_async().await`
+    // if running in async environment.
+    std::thread::spawn(move || {
+        while let Ok(event) = receiver.recv() {
+            match event {
+                ServiceEvent::ServiceResolved(info) => {
+                    println!("Resolved a new service: {}", info.get_fullname());
+                }
+                other_event => {
+                    println!("Received other event: {:?}", &other_event);
+                }
             }
         }
-        (&Method::GET, "/") => {
-            let contents = include_str!("../static/index.html");
-            let response = Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "text/html")
-                .body(Body::from(contents))
-                .unwrap();
-            Ok(response)
-        }
-        _ => {
-            let response = Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Not Found"))
-                .unwrap();
-            Ok(response)
-        }
-    }
+    });
+    
+    // Gracefully shutdown the daemon.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    mdns.shutdown().unwrap();
 }
-

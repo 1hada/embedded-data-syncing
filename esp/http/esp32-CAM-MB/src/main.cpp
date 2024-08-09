@@ -1,35 +1,11 @@
-// https://www.instructables.com/Getting-Started-With-ESP32-CAM-Streaming-Video-Usi/
-// https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/Camera/CameraWebServer/CameraWebServer.ino
+#include "esp_camera.h"
+#include <WiFi.h>
+#include "esp_http_server.h"
 
-//
-// WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
-//            Ensure ESP32 Wrover Module or other board with PSRAM is selected
-//            Partial images will be transmitted if image exceeds buffer size
-//
-//            You must select partition scheme from the board menu that has at least 3MB APP space.
-//            Face Recognition is DISABLED for ESP32 and ESP32-S2, because it takes up from 15
-//            seconds to process single frame. Face Detection is ENABLED if PSRAM is enabled as well
-
-// ===================
-// Select camera model
-// ===================
-// #define CAMERA_MODEL_WROVER_KIT // Has PSRAM
-// #define CAMERA_MODEL_ESP_EYE // Has PSRAM
-// #define CAMERA_MODEL_ESP32S3_EYE // Has PSRAM
-// #define CAMERA_MODEL_M5STACK_PSRAM // Has PSRAM
-// #define CAMERA_MODEL_M5STACK_V2_PSRAM // M5Camera version B Has PSRAM
-// #define CAMERA_MODEL_M5STACK_WIDE // Has PSRAM
-// #define CAMERA_MODEL_M5STACK_ESP32CAM // No PSRAM
-// #define CAMERA_MODEL_M5STACK_UNITCAM // No PSRAM
 #define CAMERA_MODEL_AI_THINKER // Has PSRAM
-// #define CAMERA_MODEL_TTGO_T_JOURNAL // No PSRAM
-// #define CAMERA_MODEL_XIAO_ESP32S3 // Has PSRAM
-//  ** Espressif Internal Boards **
-// #define CAMERA_MODEL_ESP32_CAM_BOARD
-// #define CAMERA_MODEL_ESP32S2_CAM_BOARD
-// #define CAMERA_MODEL_ESP32S3_CAM_LCD
-// #define CAMERA_MODEL_DFRobot_FireBeetle2_ESP32S3 // Has PSRAM
-// #define CAMERA_MODEL_DFRobot_Romeo_ESP32S3 // Has PSRAM
+
+#include "camera_pins.h"
+
 
 // Core
 #include "Arduino.h"
@@ -49,155 +25,170 @@
 #include "secrets.h"
 #include "hardware_constants.h"
 
-#include <base64.h>
-
-// Helpers
-void nameFound(const char *name, IPAddress ip);
-void sendFrameToServerHttps(uint8_t *data, size_t len);
-void reconnect();
-
-// Tasks
-void captureAndPublishImage(void *parameter);
-void resolveHostIp(void *parameter);
-void initCamera(void *parameter);
+httpd_handle_t camera_httpd = NULL;
 
 // Network data
-int status = WL_IDLE_STATUS; // the WiFi radio's status
 WiFiUDP udp;
 MDNS mdns(udp);
+int loopWait_ms = 1000;
 IPAddress ip;
 String server_url = "https://your_server_ip/video_stream";
-bool server_found = false;
+bool remote_server_found = false;
+bool esp_server_running = false;
 // Use WiFiClientSecure for HTTPS but you must eventually also use the keys and certificates, TODO
 WiFiClientSecure client;
 
-void captureAndPublishImage(void *parameter)
-{
-  while (true)
-  {
-    if (server_found)
-    {
-      camera_fb_t *fb = esp_camera_fb_get();
-      if (!fb)
-      {
-        Serial.println("Camera capture failed");
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        continue;
-      }
 
-      // Send the frame to the server
-      sendFrameToServerHttps(fb->buf, fb->len);
-      // Release the frame buffer
-      esp_camera_fb_return(fb);
+// Helpers
+void nameFound(const char *name, IPAddress ip);
+void resolveHostIp();
+void initCamera();
+
+
+esp_err_t print_request_handler(httpd_req_t *req) {
+    char buffer[1024];
+    int ret, remaining = req->content_len;
+
+    // Print the request method and URI
+    Serial.printf("Request URI: %s\n", req->uri);
+    Serial.printf("Request Method: %s\n", req->method == HTTP_GET ? "GET" : "POST");
+
+    // Print headers
+    Serial.println("Headers:");
+    httpd_req_get_hdr_value_len(req, "Host");
+    httpd_req_get_hdr_value_str(req, "Host", buffer, sizeof(buffer));
+    Serial.printf("Host: %s\n", buffer);
+
+    httpd_req_get_hdr_value_len(req, "User-Agent");
+    httpd_req_get_hdr_value_str(req, "User-Agent", buffer, sizeof(buffer));
+    Serial.printf("User-Agent: %s\n", buffer);
+
+    httpd_req_get_hdr_value_len(req, "Accept");
+    httpd_req_get_hdr_value_str(req, "Accept", buffer, sizeof(buffer));
+    Serial.printf("Accept: %s\n", buffer);
+
+    httpd_req_get_hdr_value_len(req, "Origin");
+    httpd_req_get_hdr_value_str(req, "Origin", buffer, sizeof(buffer));
+    Serial.printf("Origin: %s\n", buffer);
+
+    // Read and print the request body (if any)
+    Serial.println("Body:");
+    while (remaining > 0) {
+        if ((ret = httpd_req_recv(req, buffer, std::min<int>(remaining, sizeof(buffer)))) <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            return ESP_FAIL;
+        }
+        buffer[ret] = '\0';
+        Serial.printf("%s", buffer);
+        remaining -= ret;
+    }
+    Serial.println();
+
+    return ESP_OK;
+}
+
+esp_err_t stream_handler(httpd_req_t *req) {
+    print_request_handler(req);
+    
+    camera_fb_t *fb = NULL;
+    esp_err_t res = ESP_OK;
+
+    char part_buf[64];
+    static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
+    static const char* _STREAM_BOUNDARY = "\r\n--frame\r\n";
+    static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+
+    // Extract the Origin header
+    char origin[128] = {0};
+    size_t origin_len = httpd_req_get_hdr_value_len(req, "Host");
+    if (origin_len > 0 && origin_len < sizeof(origin)) {
+        httpd_req_get_hdr_value_str(req, "Host", origin, sizeof(origin));
+    }
+    Serial.print("Handling Request from ");
+    Serial.print(origin);
+    Serial.print(" trying to match with ");
+    Serial.print(ip.toString());
+    Serial.println();
+
+    // Check if the origin matches the allowed IP prefix
+    if (strncmp(origin, ip.toString().c_str(), strlen(ip.toString().c_str())) == 0) {
+        Serial.println("Allowed Prefix Found");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin);
+    } else {
+        Serial.println("Failed to match Prefix");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "null");
+        return ESP_FAIL;
     }
 
-    // Delay for next capture
-    vTaskDelay(pdMS_TO_TICKS(4)); // Delay for 1000 milliseconds (1 second)
-  }
-}
+    httpd_resp_set_hdr(req, "X-Framerate", "60");
+    httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
 
-void sendFrameToServerHttps(uint8_t *data, size_t len)
-{
-  WiFiClient client;
+    while (true) {
+        fb = esp_camera_fb_get();
+        if (!fb) {
+            Serial.println("Camera capture failed");
+            return ESP_FAIL;
+        }
 
-  // Connect to the server
-  if (!client.connect(ip, HTTP_PORT))
-  {
-    Serial.println("Connection to server failed");
-    return;
-  }
-  // Base64 encode the frame data
-  String frameData = base64::encode(data, len);
+        size_t hlen = snprintf(part_buf, 64, _STREAM_PART, fb->len);
+        res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
+        if (res != ESP_OK) {
+            esp_camera_fb_return(fb);
+            break;
+        }
+        res = httpd_resp_send_chunk(req, part_buf, hlen);
+        if (res != ESP_OK) {
+            esp_camera_fb_return(fb);
+            break;
+        }
+        res = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
+        if (res != ESP_OK) {
+            esp_camera_fb_return(fb);
+            break;
+        }
+        res = httpd_resp_send_chunk(req, "\r\n", 2);
+        if (res != ESP_OK) {
+            esp_camera_fb_return(fb);
+            break;
+        }
+        esp_camera_fb_return(fb);
 
-  // Construct the JSON object
-  String jsonPayload = "{\"camera_id\": \"" + String(SOURCE_ID) + "\", \"frame\": \"" + frameData + "\"}";
-
-  // Set up the HTTPS request headers
-  String headers = "POST /video_stream HTTP/1.1\r\n";
-  headers += "Host: " + String(server_url) + "\r\n";
-  headers += "Content-Type: application/json\r\n";
-  headers += "Content-Length: " + String(jsonPayload.length()) + "\r\n";
-  headers += "\r\n";
-
-  // Send the HTTP request headers
-  client.print(headers);
-
-  // Send the JSON payload
-  client.print(jsonPayload);
-
-  // Ensure the request is properly closed
-  client.println("");
-
-  // Optionally, print the server response
-  while (client.connected() && client.available())
-  {
-    if (client.available())
-    {
-      String line = client.readStringUntil('\r');
-      Serial.print(line);
-    }
-  }
-  client.stop();
-}
-
-// This function is called when a name is resolved via mDNS/Bonjour. We set
-// this up in the setup() function above. The name you give to this callback
-// function does not matter at all, but it must take exactly these arguments
-// (a const char*, which is the hostName you wanted resolved, and a const
-// byte[4], which contains the IP address of the host on success, or NULL if
-// the name resolution timed out).
-void nameFound(const char *name, IPAddress curIp)
-{
-  if (curIp != INADDR_NONE)
-  {
-    Serial.print("The IP address for '");
-    Serial.print(name);
-    Serial.print("' is ");
-    Serial.println(curIp);
-    ip = curIp;
-    server_url = "https://" + ip.toString() + "/video_stream";
-    Serial.print("Server URL is ");
-    Serial.println(server_url);
-    server_found = true;
-  }
-  else
-  {
-    Serial.print("Resolving '");
-    Serial.print(name);
-    Serial.println("' timed out.");
-  }
-}
-
-void resolveHostIp(void *parameter)
-{
-  int loopWait_ms = 5000;
-  while (ip == INADDR_NONE)
-  {
-    // You can use the "isResolvingName()" function to find out whether the
-    // mDNS library is currently resolving a host name.
-    // If so, we skip this input, since we want our previous request to continue.
-    if (!mdns.isResolvingName())
-    {
-      // Now we tell the mDNS library to resolve the host name. We give it a
-      // timeout of 5 seconds (e.g. 5000 milliseconds) to find an answer. The
-      // library will automatically resend the query every second until it
-      // either receives an answer or your timeout is reached - In either case,
-      // the callback function you specified in setup() will be called.
-      mdns.resolveName(MDNS_HOSTNAME.c_str(), loopWait_ms);
+        delay(100); // Adjust delay as needed to control frame rate
     }
 
-    // This actually runs the mDNS module. YOU HAVE TO CALL THIS PERIODICALLY,
-    // OR NOTHING WILL WORK! Preferably, call it once per loop().
-    mdns.run();
-    vTaskDelay(pdMS_TO_TICKS(loopWait_ms)); // Delay for 1000 milliseconds (1 second)
-  }
-
-  // Task complete, delete the task
-  vTaskDelete(NULL);
+    // Go ahead and restart in case the host machine of interest has had it's IP changed
+    // Note : in a high security scenario this could create an issue if multiple machines have the same MDNS name
+    ESP.restart();
+    return res;
 }
+
+void startCameraServer() {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    httpd_uri_t stream_uri = {
+        .uri       = "/stream",
+        .method    = HTTP_GET,
+        .handler   = stream_handler,
+        .user_ctx  = NULL
+    };
+
+
+  Serial.print("My IP address: ");
+  Serial.println(WiFi.localIP());
+  Serial.printf("Starting web server on port: '%d'\n", config.server_port);
+  if (httpd_start(&camera_httpd, &config) == ESP_OK) {
+      httpd_register_uri_handler(camera_httpd, &stream_uri);
+  }
+  config.server_port += 1;
+  config.ctrl_port += 1;
+
+  esp_server_running = true;
+}
+
 
 // Function to initialize camera
-void initCamera(void *parameter)
+void initCamera()
 {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -231,42 +222,96 @@ void initCamera(void *parameter)
     Serial.printf("Camera init failed with error 0x%x", err);
     ESP.restart();
   }
-
-  // Task complete, delete the task
-  vTaskDelete(NULL);
 }
 
-void setup()
+
+// This function is called when a name is resolved via mDNS/Bonjour. We set
+// this up in the setup() function above. The name you give to this callback
+// function does not matter at all, but it must take exactly these arguments
+// (a const char*, which is the hostName you wanted resolved, and a const
+// byte[4], which contains the IP address of the host on success, or NULL if
+// the name resolution timed out).
+void nameFound(const char *name, IPAddress curIp)
 {
-  Serial.begin(115200);
-
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED)
+  if (curIp != INADDR_NONE)
   {
-    delay(500);
-    Serial.print(".");
+    Serial.print("The IP address for '");
+    Serial.print(name);
+    Serial.print("' is ");
+    Serial.println(curIp);
+    ip = curIp;
+    server_url = "http://" + ip.toString() + "/video_stream";
+    Serial.print("Server URL is ");
+    Serial.println(server_url);
+    remote_server_found = true;
   }
-  Serial.println("");
-  Serial.println("WiFi connected");
-
-  // Initialize the mDNS library. You can now reach or ping this
-  // Arduino via the host name "arduino.local", provided that your operating
-  // system is mDNS/Bonjour-enabled (such as macOS).
-  // Always call this before any other method!
-  mdns.begin(WiFi.localIP(), SOURCE_ID);
-  // We specify the function that the mDNS library will call when it
-  // resolves a host name. In this case, we will call the function named
-  // "nameFound".
-  mdns.setNameResolvedCallback(nameFound);
-
-  // Create tasks for camera initialization and image capture
-  xTaskCreatePinnedToCore(resolveHostIp, "resolveHostIp", 4096, NULL, 10, NULL, 1);
-  xTaskCreatePinnedToCore(initCamera, "initCamera", 4096, NULL, 7, NULL, 1);
-  xTaskCreatePinnedToCore(captureAndPublishImage, "captureAndPublishImage", 16384, NULL, 5, NULL, 1); // 16384 stack depth
+  else
+  {
+    Serial.print("Resolving '");
+    Serial.print(name);
+    Serial.println("' timed out.");
+  }
 }
 
-void loop()
+void resolveHostIp()
 {
-  // This loop will not execute since tasks are running in FreeRTOS
+    // You can use the "isResolvingName()" function to find out whether the
+    // mDNS library is currently resolving a host name.
+    // If so, we skip this input, since we want our previous request to continue.
+    if (!mdns.isResolvingName())
+    {
+      // Now we tell the mDNS library to resolve the host name. We give it a
+      // timeout of 5 seconds (e.g. 5000 milliseconds) to find an answer. The
+      // library will automatically resend the query every second until it
+      // either receives an answer or your timeout is reached - In either case,
+      // the callback function you specified in setup() will be called.
+      mdns.resolveName(MDNS_HOSTNAME.c_str(), loopWait_ms);
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Connecting to WiFi...");
+    }
+
+    Serial.println("Connected to WiFi");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+
+
+    // Initialize the mDNS library. You can now reach or ping this
+    // Arduino via the host name "arduino.local", provided that your operating
+    // system is mDNS/Bonjour-enabled (such as macOS).
+    // Always call this before any other method!
+    mdns.begin(WiFi.localIP(), SOURCE_ID);
+    // We specify the function that the mDNS library will call when it
+    // resolves a host name. In this case, we will call the function named
+    // "nameFound".
+    mdns.setNameResolvedCallback(nameFound);
+    mdns.addServiceRecord("Soku Firestick._http",
+                        80,
+                        MDNSServiceTCP);
+    initCamera();
+}
+
+void loop() {
+    if (ip == INADDR_NONE){
+        resolveHostIp();
+    }
+    else{
+        if (!esp_server_running)
+        {
+            // only starts the server if the HostIP is resolved
+            startCameraServer();
+        }
+    }
+    // This actually runs the mDNS module. YOU HAVE TO CALL THIS PERIODICALLY,
+    // OR NOTHING WILL WORK! Preferably, call it once per loop().
+    mdns.run();
+    delay(loopWait_ms); // Adjust delay as needed to control frame rate
 }

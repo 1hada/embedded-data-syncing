@@ -37,3 +37,17 @@ Read more about using header files in official GCC documentation:
 * Computed Includes
 
 https://gcc.gnu.org/onlinedocs/cpp/Header-Files.html
+
+
+
+hostnamectl set-hostname "Any-Name"
+hostnamectl status
+modify the MDNS name in secrets to match "Any-Name"
+systemctl status avahi-daemon.service
+sudo systemctl restart avahi-daemon.service
+
+
+Due to a malloc stemming from the `addServiceRecord(..)` call, we need to need to uncomment the `_BROKEN_MALLOC_` header from `.pio/libdeps/esp32cammbbasiccam/ArduinoMDNS/MDNS.cpp`, found by using `monitor_filters = esp32_exception_decoder` in the `*.ini` file:
+```
+//#define  _BROKEN_MALLOC_   1
+```
