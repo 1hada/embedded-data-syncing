@@ -26,6 +26,19 @@ fn get_html(camera_finder: &CameraFinder) -> String {
             camera_finder.get_camera_url(chunk[0]).unwrap_or_default(),
             camera_finder.get_camera_url(chunk[1]).unwrap_or_default()
         );
+        let row = format!(
+            r#"<tr>
+                <td><iframe src ="{}" width="100%" height="300">
+                    <p>Your browser does not support iframes.</p>
+                    </iframe></td>
+                <td><iframe src ="{}" width="100%" height="300">
+                    <p>Your browser does not support iframes.</p>
+                    </iframe></td>
+            </tr>"#,
+            camera_finder.get_camera_url(chunk[0]).unwrap_or_default(),
+            camera_finder.get_camera_url(chunk[1]).unwrap_or_default()
+        );
+        
         table_rows.push_str(&row);
     }
 

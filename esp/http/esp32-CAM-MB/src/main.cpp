@@ -100,6 +100,7 @@ esp_err_t stream_handler(httpd_req_t *req) {
     static const char* _STREAM_BOUNDARY = "\r\n--frame\r\n";
     static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
+    /*
     // Extract the Origin header
     char origin[128] = {0};
     size_t origin_len = httpd_req_get_hdr_value_len(req, "Host");
@@ -121,6 +122,7 @@ esp_err_t stream_handler(httpd_req_t *req) {
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "null");
         return ESP_FAIL;
     }
+    */
 
     httpd_resp_set_hdr(req, "X-Framerate", "60");
     httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
@@ -160,6 +162,7 @@ esp_err_t stream_handler(httpd_req_t *req) {
 
     // Go ahead and restart in case the host machine of interest has had it's IP changed
     // Note : in a high security scenario this could create an issue if multiple machines have the same MDNS name
+    // so you might want to make the address static
     ESP.restart();
     return res;
 }
@@ -288,12 +291,12 @@ void setup() {
     // Arduino via the host name "arduino.local", provided that your operating
     // system is mDNS/Bonjour-enabled (such as macOS).
     // Always call this before any other method!
-    mdns.begin(WiFi.localIP(), SOURCE_ID);
+    mdns.begin(WiFi.localIP(), SOURCE_ID.c_str());
     // We specify the function that the mDNS library will call when it
     // resolves a host name. In this case, we will call the function named
     // "nameFound".
     mdns.setNameResolvedCallback(nameFound);
-    mdns.addServiceRecord("Soku Firestick._http",
+    mdns.addServiceRecord(SRV_RECORD.c_str(),
                         80,
                         MDNSServiceTCP);
     initCamera();
