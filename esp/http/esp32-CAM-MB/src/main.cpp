@@ -85,6 +85,7 @@ esp_err_t print_request_handler(httpd_req_t *req) {
         remaining -= ret;
     }
     Serial.println();
+    Serial.println("Done printing request");
 
     return ESP_OK;
 }
@@ -124,7 +125,7 @@ esp_err_t stream_handler(httpd_req_t *req) {
     }
     */
 
-    httpd_resp_set_hdr(req, "X-Framerate", "60");
+    httpd_resp_set_hdr(req, "X-Framerate", "25");
     httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
 
     while (true) {
@@ -277,9 +278,15 @@ void setup() {
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+    unsigned long startTime = millis();  // Record the start time
     while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
         Serial.println("Connecting to WiFi...");
+
+        if (millis() - startTime >= 60000) {  // 1 minute timeout
+            Serial.println("Failed to connect to WiFi. Restarting...");
+            ESP.restart();  // Reset the ESP device
+        }
     }
 
     Serial.println("Connected to WiFi");

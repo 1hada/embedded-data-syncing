@@ -14,18 +14,10 @@ pub async fn start_server(camera_finder: CameraFinder) {
 }
 
 fn get_html(camera_finder: &CameraFinder) -> String {
-    let camera_names = ["source_1", "source_2", "source_3", "source_4"];
+    let camera_names = ["CameraName1", "CameraName2", "CameraName3", "CameraName4"];
     let mut table_rows = String::new();
 
     for chunk in camera_names.chunks(2) {
-        let row = format!(
-            r#"<tr>
-                <td>{}</td>
-                <td>{}</td>
-            </tr>"#,
-            camera_finder.get_camera_url(chunk[0]).unwrap_or_default(),
-            camera_finder.get_camera_url(chunk[1]).unwrap_or_default()
-        );
         let row = format!(
             r#"<tr>
                 <td><iframe src ="{}" width="100%" height="300">
