@@ -18,7 +18,7 @@ import cv2
 from ultralytics import YOLO
 import torch
 
-from save-stream import save_stream_to_video
+from save_stream import StreamSaver
 from iphandler import IPStreamHandler
 
 class CameraDiscovery:
@@ -36,6 +36,7 @@ class CameraDiscovery:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"Inference device is {device}")
         self.model = YOLO("yolov8n.pt").to(device)
+        self.stream_saver_dict = {}
 
     def on_service_state_change(self, zeroconf, service_type, name, state_change):
         if state_change is ServiceStateChange.Added:
@@ -59,6 +60,7 @@ class CameraDiscovery:
         with open(self.output_file, "w") as file:
             for ip in self.discovered_ips:
                 file.write(f"{ip}\n")
+                self.stream_saver_dict[ip] = StreamSaver(ip)
 
     def discovery_loop(self):
         while True:
@@ -83,6 +85,7 @@ class CameraDiscovery:
         while self.running:
             print(f"About to run")
             results = self.model(self.output_file, stream=True)  # generator of Results objects
+            person_found = True
             for res in results:
               #print(res)
               for box in res.boxes:
@@ -107,14 +110,21 @@ class CameraDiscovery:
 
                   # Prepare label with class and confidence
                   label = f"{cls} {id}: {conf:.2f}"
+                  if cls == 0:
+                    person_found = True
 
                   # Draw the label
                   (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
                   cv2.rectangle(res.orig_img, (x_min, y_min - 20), (x_min + w, y_min), (0, 255, 0), -1)
                   cv2.putText(res.orig_img, label, (x_min, y_min - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+              if person_found:
+                  print("Person Found")
+                  for ip, stream_saver in self.stream_saver_dict.items() :
+                      stream_saver.save_stream_to_video(stream_url=ip, output_dir="video-streams", duration=60)
+                  person_found = False
               # Display the image
               # TODO mutex / thread safe way to do save_stream_to_video(ip, file save path)
-              cv2.imshow(f"Detected Objects {res.path}", res.orig_img)
+              #cv2.imshow(f"Detected Objects {res.path}", res.orig_img)
               if cv2.waitKey(1) == ord('q') or not self.running:
                   self.running = False
                   break
@@ -152,7 +162,7 @@ if __name__ == "__main__":
     output_file = "./list.streams"
 
     # Define the service names to look for
-    service_names = ["CameraName1", "CameraName2", "CameraName3"]
+    service_names = ["Camera1", "Camera2", "Camera3"]
 
     # Create an instance of the CameraDiscovery class
     camera_discovery = CameraDiscovery(output_file, service_names)
