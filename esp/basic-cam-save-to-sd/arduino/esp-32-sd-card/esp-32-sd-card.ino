@@ -187,14 +187,14 @@ void configInitCamera(){
 
     // Optimized settings for video recording
     if(psramFound()){
-        config.frame_size = FRAMESIZE_XGA;//FRAMESIZE_UXGA; // Set to 1600x1200 as you specified
-        config.jpeg_quality = 90; // Higher quality for video
+        config.frame_size = FRAMESIZE_QVGA;//FRAMESIZE_XGA;//FRAMESIZE_UXGA; // Set to 1600x1200 as you specified
+        config.jpeg_quality = 15; // Higher quality for video
         config.fb_count = 2;
     } else {
         // If no PSRAM, UXGA might not be feasible, fall back to a smaller size
         Serial.println("No PSRAM found, falling back to QVGA.");
         config.frame_size = FRAMESIZE_QVGA; // 320x240
-        config.jpeg_quality = 50;
+        config.jpeg_quality = 20;
         config.fb_count = 1;
     }
     
@@ -228,32 +228,31 @@ void configInitCamera(){
     Serial.printf("Camera Resolution set to: %d x %d\n", videoWidth, videoHeight);
 
     // Enable hardware auto-exposure (let OV2640 handle it)
+    s->set_vflip(s, 1);      // Vertical flip to correct inversion
+    s->set_hmirror(s, 1);    // Horizontal mirror if needed
+    
+    // Optimized settings for speed
     s->set_exposure_ctrl(s, 1);    // Enable AEC
-    s->set_aec2(s, 1);             // Enable AEC2 for better performance
+    s->set_aec2(s, 0);             // Disable AEC2 for speed
     s->set_ae_level(s, 0);         // Neutral AE level
     
-    // Enable hardware auto-gain for low light
     s->set_gain_ctrl(s, 1);        // Enable AGC
     s->set_agc_gain(s, 0);         // Let hardware decide
     
-    // Enable auto white balance for color accuracy
     s->set_whitebal(s, 1);         // Enable AWB
     s->set_awb_gain(s, 1);         // Enable AWB gain
     
-    // Optimize for dash cam (sharp details, license plates)
-    s->set_brightness(s, 0);       // Neutral brightness
-    s->set_contrast(s, 1);         // Slight contrast boost for plates
-    s->set_saturation(s, 0);       // Neutral saturation
-    s->set_sharpness(s, 2);        // Increase sharpness for detail
+    // Balanced settings for speed vs quality
+    s->set_brightness(s, 0);       
+    s->set_contrast(s, 0);         // Reduce processing
+    s->set_saturation(s, 0);       
+    s->set_sharpness(s, 0);        // Reduce processing for speed
     
-    // Enable lens correction to reduce distortion
-    s->set_lenc(s, 1);
-    
-    // Reduce noise for cleaner image
-    s->set_denoise(s, 1);
+    s->set_lenc(s, 0);             // Disable lens correction for speed
+    s->set_denoise(s, 0);          // Disable denoise for speed
     
     // Set quality high for license plate detail
-    s->set_quality(s, 20);          // Higher quality (1-63, lower = better)
+    s->set_quality(s, 63);          // Higher quality (1-63, lower = better)
     
 }
 
@@ -439,20 +438,20 @@ void manageSdCardSpace() {
         return;
     }
 
-        File file = root.openNextFile();
-        while (file && fileCount < MAX_FILES) {
-            if (!file.isDirectory()) {
-                String fileName = file.name();
-                if (fileName.startsWith("/video_") && fileName.endsWith(".avi")) {
-                    files[fileCount].name = fileName;
-                    files[fileCount].size = file.size();
-                    files[fileCount].modTime = file.getLastWrite();
-                    fileCount++;
-                }
+    File file = root.openNextFile();
+    while (file && fileCount < MAX_FILES) {
+        if (!file.isDirectory()) {
+            String fileName = file.name();
+            if (fileName.startsWith("/video_") && fileName.endsWith(".avi")) {
+                files[fileCount].name = fileName;
+                files[fileCount].size = file.size();
+                files[fileCount].modTime = file.getLastWrite();
+                fileCount++;
             }
-            file.close();
-            file = root.openNextFile();
         }
+        file.close();
+        file = root.openNextFile();
+    }
     root.close();
 
     if (fileCount == 0) {
@@ -826,6 +825,9 @@ void setup() {
 
 void loop() {
     unsigned long currentTime = millis();
+
+    // Handle the webpage
+    server.handleClient();
     
     // Capture at specified interval
     if (currentTime - lastCaptureTime >= CAPTURE_INTERVAL_MS) {
@@ -837,9 +839,6 @@ void loop() {
             manageSdCardSpace();
         }
     }
-
-    // Handle the webpage
-    server.handleClient();
 
     // Small delay to prevent overwhelming the system
     delay(5);

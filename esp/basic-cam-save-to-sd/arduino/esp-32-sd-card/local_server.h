@@ -58,7 +58,7 @@ void setupServer() {
 void generateRandomPassword() {
   const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   for (int i = 0; i < 8; i++) {
-    // FOR TESTING the random password is removed
+    // FOR TESTING the random password is removed //     password[i] = charset[random(0, sizeof(charset) - 1)];
     password[i] = charset[i];
   }
   password[8] = '\0';
@@ -141,32 +141,31 @@ void configureCameraForDashCam() {
   if (!s) return;
 
   // Enable hardware auto-exposure (let OV2640 handle it)
+  s->set_vflip(s, 1);      // Vertical flip to correct inversion
+  s->set_hmirror(s, 1);    // Horizontal mirror if needed
+  
+  // Optimized settings for speed
   s->set_exposure_ctrl(s, 1);    // Enable AEC
-  s->set_aec2(s, 1);             // Enable AEC2 for better performance
+  s->set_aec2(s, 0);             // Disable AEC2 for speed
   s->set_ae_level(s, 0);         // Neutral AE level
   
-  // Enable hardware auto-gain for low light
   s->set_gain_ctrl(s, 1);        // Enable AGC
   s->set_agc_gain(s, 0);         // Let hardware decide
   
-  // Enable auto white balance for color accuracy
   s->set_whitebal(s, 1);         // Enable AWB
   s->set_awb_gain(s, 1);         // Enable AWB gain
   
-  // Optimize for dash cam (sharp details, license plates)
-  s->set_brightness(s, 0);       // Neutral brightness
-  s->set_contrast(s, 1);         // Slight contrast boost for plates
-  s->set_saturation(s, 0);       // Neutral saturation
-  s->set_sharpness(s, 2);        // Increase sharpness for detail
+  // Balanced settings for speed vs quality
+  s->set_brightness(s, 0);       
+  s->set_contrast(s, 0);         // Reduce processing
+  s->set_saturation(s, 0);       
+  s->set_sharpness(s, 0);        // Reduce processing for speed
   
-  // Enable lens correction to reduce distortion
-  s->set_lenc(s, 1);
-  
-  // Reduce noise for cleaner image
-  s->set_denoise(s, 1);
+  s->set_lenc(s, 0);             // Disable lens correction for speed
+  s->set_denoise(s, 0);          // Disable denoise for speed
   
   // Set quality high for license plate detail
-  s->set_quality(s, 20);          // Higher quality (1-63, lower = better)
+  s->set_quality(s, 63);          // Higher quality (1-63, lower = better)
   
   delay(500); // Reduced stabilization time
   
