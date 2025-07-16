@@ -22,9 +22,11 @@
 #include <WiFi.h>
 #include "time.h"
 
+#include "local_server.h"
+
 // REPLACE WITH YOUR NETWORK CREDENTIALS
-const char* ssid = "REPLACE_WITH_YOUR_SSID";
-const char* password = "REPLACE_WITH_YOUR_PASSWORD";
+//const char* ssid = "REPLACE_WITH_YOUR_SSID";
+//const char* password = "REPLACE_WITH_YOUR_PASSWORD";
 
 // REPLACE WITH YOUR TIMEZONE STRING
 String myTimezone = "WET0WEST,M3.5.0/1,M10.5.0";
@@ -83,14 +85,12 @@ const unsigned long BRIGHTNESS_CHECK_INTERVAL = 5000; // Check every 5 seconds
 uint32_t videoWidth = 0;
 uint32_t videoHeight = 0;
 
-// *** NEW: Custom Timestamp Metadata Chunk ***
 // 'TIMS' FOURCC
 struct TimestampChunk {
   char id[4] = {'T', 'I', 'M', 'S'};
   uint32_t size; // Size of the timestamp data
   uint64_t unix_epoch_ms; // Unix epoch time in milliseconds (8 bytes)
 };
-// ********************************************
 
 // AVI file header structures (leave default values, they will be overwritten)
 struct AVIHeader {
@@ -183,18 +183,18 @@ void configInitCamera(){
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     config.xclk_freq_hz = 20000000;
-    config.pixel_format = PIXFORMAT_JPEG;
+    config.pixel_format = PIXFORMAT_YUV422;// YUV is optimized for video compared to PIXFORMAT_JPEG
 
     // Optimized settings for video recording
     if(psramFound()){
         config.frame_size = FRAMESIZE_XGA;//FRAMESIZE_UXGA; // Set to 1600x1200 as you specified
-        config.jpeg_quality = 15; // Higher quality for video
+        config.jpeg_quality = 90; // Higher quality for video
         config.fb_count = 2;
     } else {
         // If no PSRAM, UXGA might not be feasible, fall back to a smaller size
         Serial.println("No PSRAM found, falling back to QVGA.");
         config.frame_size = FRAMESIZE_QVGA; // 320x240
-        config.jpeg_quality = 20;
+        config.jpeg_quality = 50;
         config.fb_count = 1;
     }
     
@@ -227,28 +227,34 @@ void configInitCamera(){
     }
     Serial.printf("Camera Resolution set to: %d x %d\n", videoWidth, videoHeight);
 
-    s->set_brightness(s, 0);     // -2 to 2
-    s->set_contrast(s, 0);       // -2 to 2
-    s->set_saturation(s, 0);     // -2 to 2
-    s->set_special_effect(s, 0); // 0 to 6
-    s->set_whitebal(s, 1);       // 0 = disable , 1 = enable
-    s->set_awb_gain(s, 1);       // 0 = disable , 1 = enable
-    s->set_wb_mode(s, 0);        // 0 to 4
-    s->set_exposure_ctrl(s, 1);  // 0 = disable , 1 = enable
-    s->set_aec2(s, 0);           // 0 = disable , 1 = enable
-    s->set_ae_level(s, 0);       // -2 to 2
-    s->set_aec_value(s, 300);    // 0 to 1200
-    s->set_gain_ctrl(s, 1);      // 0 = disable , 1 = enable
-    s->set_agc_gain(s, 0);       // 0 to 30
-    s->set_gainceiling(s, (gainceiling_t)0);  // 0 to 6
-    s->set_bpc(s, 0);            // 0 = disable , 1 = enable
-    s->set_wpc(s, 1);            // 0 = disable , 1 = enable
-    s->set_raw_gma(s, 1);        // 0 = disable , 1 = enable
-    s->set_lenc(s, 1);           // 0 = disable , 1 = enable
-    s->set_hmirror(s, 0);        // 0 = disable , 1 = enable
-    s->set_vflip(s, 0);          // 0 = disable , 1 = enable
-    s->set_dcw(s, 1);            // 0 = disable , 1 = enable
-    s->set_colorbar(s, 0);       // 0 = disable , 1 = enable
+    // Enable hardware auto-exposure (let OV2640 handle it)
+    s->set_exposure_ctrl(s, 1);    // Enable AEC
+    s->set_aec2(s, 1);             // Enable AEC2 for better performance
+    s->set_ae_level(s, 0);         // Neutral AE level
+    
+    // Enable hardware auto-gain for low light
+    s->set_gain_ctrl(s, 1);        // Enable AGC
+    s->set_agc_gain(s, 0);         // Let hardware decide
+    
+    // Enable auto white balance for color accuracy
+    s->set_whitebal(s, 1);         // Enable AWB
+    s->set_awb_gain(s, 1);         // Enable AWB gain
+    
+    // Optimize for dash cam (sharp details, license plates)
+    s->set_brightness(s, 0);       // Neutral brightness
+    s->set_contrast(s, 1);         // Slight contrast boost for plates
+    s->set_saturation(s, 0);       // Neutral saturation
+    s->set_sharpness(s, 2);        // Increase sharpness for detail
+    
+    // Enable lens correction to reduce distortion
+    s->set_lenc(s, 1);
+    
+    // Reduce noise for cleaner image
+    s->set_denoise(s, 1);
+    
+    // Set quality high for license plate detail
+    s->set_quality(s, 20);          // Higher quality (1-63, lower = better)
+    
 }
 
 // Connect to WiFi with timeout
@@ -312,19 +318,6 @@ void initTime(String timezone) {
     WiFi.mode(WIFI_OFF);
     Serial.println("WiFi disconnected to save power.");
 }
-
-// *** NEW: Function to get current timestamp (Unix epoch in milliseconds) ***
-uint64_t getCurrentTimestampMs() {
-    if (ntpTimeAvailable) {
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        return (uint64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
-    } else {
-        // Fallback to uptime if NTP not available
-        return millis(); // Millis is already in ms, starting from ESP32 boot
-    }
-}
-// **************************************************************************
 
 // Get uptime string for filename
 String getUptimeString() {
@@ -407,82 +400,6 @@ String getVideoFilename() {
     return filename;
 }
 
-// Auto-brightness adjustment
-void adjustBrightness() {
-    if (!AUTO_BRIGHTNESS_ENABLED || s == NULL) return;
-    
-    unsigned long currentTime = millis();
-    if (currentTime - lastBrightnessCheck < BRIGHTNESS_CHECK_INTERVAL) {
-        return;
-    }
-    lastBrightnessCheck = currentTime;
-
-    // For brightness adjustment, it's safer to get a smaller, quick frame or use camera's internal stats if available.
-    // Reading full JPEG data and converting to RGB for brightness is inefficient and can cause delays.
-    // Ideally, the camera sensor's AEC (Automatic Exposure Control) should handle this.
-    // This section might be more effective by adjusting s->set_aec_value directly or relying on camera's auto.
-    // For simplicity, keeping the existing (though potentially suboptimal) approach.
-
-    camera_fb_t * fb = esp_camera_fb_get();
-    if (!fb) {
-        Serial.println("Brightness adjustment: Camera capture failed");
-        return;
-    }
-
-    // Only attempt if the pixel format allows direct access or convert (less efficient)
-    // The current brightness logic assumes RGB data (fb->buf[i], fb->buf[i+1], fb->buf[i+2])
-    // but the camera is configured for PIXFORMAT_JPEG. This will NOT work correctly.
-    // For PIXFORMAT_JPEG, you'd need to decompress the JPEG to analyze brightness, which is too heavy.
-    // A more effective approach is to rely on the camera's built-in AEC/AGC settings,
-    // or to read the camera's exposure/gain status if the API supports it.
-
-    // *** IMPORTANT: The current auto-brightness logic will NOT work with PIXFORMAT_JPEG. ***
-    // This section would require a change to PIXFORMAT_RGB565/YUV422 and substantial memory/CPU.
-    // For now, it's left as-is, but be aware it's ineffective with JPEG.
-    // If auto-brightness is critical, set camera.pixel_format to RGB565 (low resolution)
-    // or rely entirely on camera's set_exposure_ctrl(s, 1); set_ae_level(s, 0); etc.
-    // which are enabled by default.
-
-    // For now, we'll return the framebuffer immediately as this logic is broken for JPEG.
-    esp_camera_fb_return(fb);
-    return; // Exit auto-brightness early if using JPEG.
-
-    /* Original (broken for JPEG) logic:
-    uint32_t brightness_sum = 0;
-    uint32_t sample_size = min(1000, (int)(fb->len / 3)); // This assumes 3 bytes per pixel
-    
-    for (uint32_t i = 0; i < sample_size * 3; i += 3) {
-        uint8_t r = fb->buf[i];
-        uint8_t g = fb->buf[i + 1];
-        uint8_t b = fb->buf[i + 2];
-        brightness_sum += (r * 0.299 + g * 0.587 + b * 0.114);
-    }
-    
-    uint8_t avg_brightness = brightness_sum / sample_size;
-    esp_camera_fb_return(fb);
-
-    // Adjust camera settings based on brightness
-    if (avg_brightness < 80) {
-        if (currentBrightness < 2) {
-            currentBrightness++;
-            s->set_brightness(s, currentBrightness);
-        }
-        if (currentContrast < 2) {
-            currentContrast++;
-            s->set_contrast(s, currentContrast);
-        }
-    } else if (avg_brightness > 160) {
-        if (currentBrightness > -2) {
-            currentBrightness--;
-            s->set_brightness(s, currentBrightness);
-        }
-        if (currentContrast > -2) {
-            currentContrast--;
-            s->set_contrast(s, currentContrast);
-        }
-    }
-    */
-}
 
 // Enhanced file management for video files
 void manageSdCardSpace() {
@@ -606,7 +523,16 @@ void initMicroSDCard() {
     Serial.printf("SD Card Size: %lluMB\n", cardSize);
 }
 
-// Create new video file with AVI headers
+
+
+
+
+
+
+
+
+
+// Create new video file with AVI headers for YUV422 source
 bool createNewVideoFile() {
     if (isRecording) {
         finishVideoFile();
@@ -635,15 +561,12 @@ bool createNewVideoFile() {
 
     // AVIHeader
     aviHeader.microSecPerFrame = microSecPerFrame_calc; // Dynamic FPS
-    // A more robust maxBytesPerSec. Max JPEG size is highly variable but can be ~1MB for UXGA.
-    // Let's set a generous buffer, e.g., 2MB/sec to cover high-quality frames.
-    // Or, a safer estimation: max_frame_size * fps
-    // If you know your max JPEG frame size, use that. For UXGA, it can be up to 150-200KB easily.
-    // Let's assume a generous 200KB/frame for UXGA (1600x1200) and 25 FPS
-    // (200 * 1024) * 25 = 5,120,000 bytes/sec
-    // Adjust this value based on empirical tests of your actual max frame sizes at your chosen quality.
-    aviHeader.maxBytesPerSec = (200 * 1024) * current_fps; // Example: 200KB/frame * FPS
-    if (aviHeader.maxBytesPerSec == 0) aviHeader.maxBytesPerSec = 5000000; // Fallback to a large value if FPS is 0 or calculation error
+    
+    // YUV422 typically compresses better than raw RGB but worse than pre-compressed JPEG
+    // Estimate ~100-150KB per frame for YUV422->JPEG conversion at decent quality
+    // This is more predictable than variable JPEG sizes
+    aviHeader.maxBytesPerSec = (120 * 1024) * current_fps; // 120KB/frame * FPS
+    if (aviHeader.maxBytesPerSec == 0) aviHeader.maxBytesPerSec = 3000000; // Fallback
     
     aviHeader.width = videoWidth;
     aviHeader.height = videoHeight;
@@ -657,7 +580,7 @@ bool createNewVideoFile() {
     streamHeader.bottom = videoHeight;
     // streamHeader.length will be updated in finishVideoFile()
 
-    // BitmapInfo
+    // BitmapInfo - still MJPEG output format
     bitmapInfo.biWidth = videoWidth;
     bitmapInfo.biHeight = videoHeight;
     bitmapInfo.biSizeImage = 0; // Set to 0 for MJPEG as it's compressed
@@ -678,70 +601,135 @@ bool createNewVideoFile() {
     videoStartTime = millis();
     isRecording = true;
 
-    Serial.printf("Started new video #%d: %s (Resolution: %dx%d, FPS: %d)\n",
+    Serial.printf("Started new video #%d: %s (Resolution: %dx%d, FPS: %d, Source: YUV422)\n",
                   currentVideoNumber, currentVideoFilename.c_str(), videoWidth, videoHeight, current_fps);
     return true;
 }
 
-// Add frame to video file (with error checking, as suggested previously)
+
+
+uint64_t getCurrentTimestampMs() {
+    if (ntpTimeAvailable) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        return (uint64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
+    } else {
+        // Fallback to uptime if NTP not available
+        return millis(); // Millis is already in ms, starting from ESP32 boot
+    }
+}
+
+// Add frame to video file - MAJOR CHANGE: Convert YUV422 to JPEG first
 void addFrameToVideo(camera_fb_t* fb) {
     if (!isRecording || !videoFile) return;
 
-    // *** NEW: Get timestamp before writing frame ***
     uint64_t frameTimestampMs = getCurrentTimestampMs();
 
-    // Write frame header (MJPG data chunk)
+    // Convert YUV422 to JPEG for AVI storage
+    size_t jpg_buf_len = 0;
+    uint8_t *jpg_buf = NULL;
+    
+    // Convert YUV422 frame to JPEG
+    // Quality 90 for dash cam (balance between quality and size)
+    bool jpeg_converted = frame2jpg(fb, 90, &jpg_buf, &jpg_buf_len);
+    
+    if (!jpeg_converted || !jpg_buf) {
+        Serial.println("YUV422 to JPEG conversion failed!");
+        return;
+    }
+
+    // Write frame header (MJPG data chunk) - now using converted JPEG
     char frameHeader[8] = {'0', '0', 'd', 'c', 0, 0, 0, 0};
-    uint32_t frameSize = fb->len;
+    uint32_t frameSize = jpg_buf_len; // Use converted JPEG size
     memcpy(&frameHeader[4], &frameSize, 4);
     
     if (videoFile.write((uint8_t*)frameHeader, 8) != 8) {
         Serial.println("Error writing frame header!");
+        free(jpg_buf); // Clean up
         return;
     }
-    if (videoFile.write(fb->buf, fb->len) != fb->len) {
-        Serial.println("Error writing frame data!");
+    
+    // Write converted JPEG data
+    if (videoFile.write(jpg_buf, jpg_buf_len) != jpg_buf_len) {
+        Serial.println("Error writing converted JPEG frame data!");
+        free(jpg_buf); // Clean up
         return;
     }
     
     // Add padding for JPEG if necessary (AVI requires even-sized chunks)
-    if (fb->len % 2 != 0) {
+    if (jpg_buf_len % 2 != 0) {
         uint8_t padding = 0;
         if (videoFile.write(&padding, 1) != 1) {
             Serial.println("Error writing JPEG padding byte!");
+            free(jpg_buf); // Clean up
             return;
         }
     }
 
-    // *** NEW: Write the custom Timestamp Chunk (TIMS) ***
+    // Clean up converted JPEG buffer
+    free(jpg_buf);
+
+    // Write the custom Timestamp Chunk (TIMS) - unchanged
     TimestampChunk timsChunk;
     timsChunk.size = sizeof(timsChunk.unix_epoch_ms); // Size of the data payload (8 bytes)
     timsChunk.unix_epoch_ms = frameTimestampMs;
 
     if (videoFile.write((uint8_t*)&timsChunk, sizeof(timsChunk)) != sizeof(timsChunk)) {
         Serial.println("Error writing TIMS chunk!");
-        // Decide if you want to stop recording or continue with potentially missing metadata
         return;
     }
 
     // Add padding for TIMS chunk if necessary (AVI requires even-sized chunks)
-    // The TIMS chunk size is 8 bytes (sizeof(timsChunk.id) + sizeof(timsChunk.size) + timsChunk.size)
-    // 4 bytes for ID + 4 bytes for size + 8 bytes for data = 16 bytes.
-    // 16 is already an even number, so no padding needed here normally.
-    // However, if the total chunk size (8 bytes header + data) is odd, add padding.
-    // In our case, sizeof(timsChunk) is 16, which is even. So no padding.
-    // If you ever change the data size to be odd, you'd need this:
-    // if (sizeof(timsChunk) % 2 != 0) {
-    //     uint8_t padding = 0;
-    //     if (videoFile.write(&padding, 1) != 1) {
-    //         Serial.println("Error writing TIMS padding byte!");
-    //         return;
-    //     }
-    // }
-
+    if (sizeof(timsChunk) % 2 != 0) {
+        uint8_t padding = 0;
+        if (videoFile.write(&padding, 1) != 1) {
+            Serial.println("Error writing TIMS padding byte!");
+            return;
+        }
+    }
 
     frameCount++;
 }
+
+// Enhanced capture function that leverages YUV422 advantages
+void captureVideoFrame() {
+    // Check if we need a new video file
+    if (shouldCreateNewVideoFile()) {
+        if (!createNewVideoFile()) {
+            Serial.println("Failed to create new video file");
+            delay(1000);
+            return;
+        }
+    }
+    
+    // Capture YUV422 frame
+    camera_fb_t * fb = esp_camera_fb_get();
+    if (!fb) {
+        Serial.println("Camera capture failed");
+        return;
+    }
+
+    // Optional: Monitor YUV422 frame quality
+    if (frameCount % 100 == 0) {
+        Serial.printf("YUV422 Frame #%d: %dx%d, Size: %dKB\n", 
+                      frameCount, fb->width, fb->height, fb->len / 1024);
+    }
+
+    // Add frame to video (will convert YUV422 to JPEG internally)
+    addFrameToVideo(fb);
+    
+    esp_camera_fb_return(fb);
+
+    // Print status and flush every 100 frames
+    if (frameCount % 100 == 0) {
+        videoFile.flush(); 
+        uint32_t sizeMB = videoFile.position() / (1024 * 1024);
+        Serial.printf("Video #%d: %s - Frame: %d, Size: %dMB\n", 
+                      currentVideoNumber, currentVideoFilename.c_str(), frameCount, sizeMB);
+    }
+}
+
+
 
 // Finish and close video file (no changes needed here, still updates totalFrames, etc.)
 void finishVideoFile() {
@@ -781,39 +769,9 @@ bool shouldCreateNewVideoFile() {
     return sizeMB >= MAX_VIDEO_SIZE_MB;
 }
 
-// Capture and add frame to video
-void captureVideoFrame() {
-    // Auto-brightness adjustment (Note: This is ineffective with PIXFORMAT_JPEG, see comments in adjustBrightness)
-    adjustBrightness();
-    
-    // Check if we need a new video file
-    if (shouldCreateNewVideoFile()) {
-        if (!createNewVideoFile()) {
-            Serial.println("Failed to create new video file");
-            return;
-        }
-    }
-    
-    // Take picture
-    camera_fb_t * fb = esp_camera_fb_get();
-    if (!fb) {
-        Serial.println("Camera capture failed");
-        return;
-    }
 
-    // Add frame to video
-    addFrameToVideo(fb);
-    
-    esp_camera_fb_return(fb);
 
-    // Print status and flush every 100 frames to make size visible
-    if (frameCount % 100 == 0) { // Adjust frequency as needed
-        videoFile.flush(); 
-        uint32_t sizeMB = videoFile.position() / (1024 * 1024);
-        Serial.printf("Video #%d: %s - Frame: %d, Size: %dMB\n", 
-                      currentVideoNumber, currentVideoFilename.c_str(), frameCount, sizeMB);
-    }
-}
+
 
 void setup() {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
@@ -856,11 +814,14 @@ void setup() {
     // Create initial video file
     if (!createNewVideoFile()) { // This will now use dynamic width, height, and FPS
         Serial.println("Failed to create initial video file!");
+         delay(1000); // Wait for 1000 milliseconds
         return;
     }
     
     Serial.println("Video dash cam ready! Starting recording...");
     lastCaptureTime = millis();
+
+    setupServer();
 }
 
 void loop() {
@@ -876,7 +837,10 @@ void loop() {
             manageSdCardSpace();
         }
     }
-    
+
+    // Handle the webpage
+    server.handleClient();
+
     // Small delay to prevent overwhelming the system
     delay(5);
 }

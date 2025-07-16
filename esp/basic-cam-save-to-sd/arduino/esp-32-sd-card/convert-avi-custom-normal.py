@@ -68,102 +68,92 @@ class AVITimestampReader:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.file:
             self.file.close()
-    
+
     def read_timestamps(self) -> List[TimestampChunk]:
         """Extract all TIMS timestamp chunks from the AVI file"""
         self.timestamps = []
-        
+
         if not self.file:
             raise ValueError("File not opened")
-        
+
         self.file.seek(0)
         file_size = os.path.getsize(self.filepath)
-        
+
         print(f"Scanning file of size {file_size} bytes for TIMS chunks...")
-        
+
         # Method 1: Search for TIMS pattern in the entire file
         found_any = False
         position = 0
-        
+
         while position < file_size - 16:  # Need at least 16 bytes for TimestampChunk
             self.file.seek(position)
             data = self.file.read(16)
-            
+
             if len(data) < 16:
                 break
-            
+
             # Look for TIMS ID at current position
             if data[:4] == b'TIMS':
                 try:
                     chunk_size = struct.unpack('<I', data[4:8])[0]
-                    
-                    if chunk_size == 8:  # Expected size for uint64_t
+
+                    # Expect chunk_size to be 8 bytes for a uint64_t timestamp
+                    if chunk_size == 8:
                         unix_epoch_ms = struct.unpack('<Q', data[8:16])[0]
-                        
-                        # More flexible timestamp validation
-                        if unix_epoch_ms > 0:  # Just check it's positive
-                            # Try to determine if this is seconds, milliseconds, or microseconds
-                            if unix_epoch_ms < 1000000:  # Likely seconds since some epoch
-                                print(f"Found TIMS chunk at position {position}: {unix_epoch_ms} (possibly seconds since boot/epoch)")
-                                # Convert to milliseconds assuming it's seconds
-                                unix_epoch_ms = unix_epoch_ms * 1000
-                            elif unix_epoch_ms < 10000000000:  # Likely milliseconds since some epoch
-                                print(f"Found TIMS chunk at position {position}: {unix_epoch_ms} (possibly milliseconds since boot/epoch)")
-                            elif unix_epoch_ms < 10000000000000:  # Likely microseconds since some epoch
-                                print(f"Found TIMS chunk at position {position}: {unix_epoch_ms} (possibly microseconds since boot/epoch)")
-                                # Convert to milliseconds
-                                unix_epoch_ms = unix_epoch_ms // 1000
-                            else:
-                                print(f"Found TIMS chunk at position {position}: {unix_epoch_ms} (large timestamp)")
-                            
+
+                        # **FIX**: Assume timestamp is already in milliseconds, no scale conversion needed.
+                        # We are explicitly communicating this by design.
+                        if unix_epoch_ms > 0:
                             self.timestamps.append(TimestampChunk(unix_epoch_ms))
                             found_any = True
+                            print(f"Found TIMS chunk at position {position}: {unix_epoch_ms} ms")
                             position += 16  # Skip past this chunk
                         else:
-                            print(f"Warning: TIMS chunk at position {position} has zero timestamp")
+                            print(f"Warning: TIMS chunk at position {position} has zero or negative timestamp ({unix_epoch_ms}). Skipping.")
                             position += 1
                     else:
-                        print(f"Warning: TIMS chunk at position {position} has unexpected size {chunk_size}")
-                        position += 1
+                        print(f"Warning: TIMS chunk at position {position} has unexpected data size {chunk_size}. Expected 8 bytes for milliseconds timestamp. Skipping.")
+                        position += 1 # Move to next byte to search for TIMS ID again
                 except struct.error as e:
-                    print(f"Error parsing TIMS chunk at position {position}: {e}")
+                    print(f"Error parsing TIMS chunk at position {position}: {e}. Skipping.")
                     position += 1
             else:
                 position += 1
-        
+
         # Method 2: If no TIMS found, try alternative approach - look for the pattern as written by ESP32
+        # This method is less robust if not explicitly using chunking, but can act as a fallback
         if not found_any:
-            print("No TIMS chunks found with Method 1, trying alternative search...")
+            print("No TIMS chunks found with Method 1, trying alternative search for exact pattern...")
             self.file.seek(0)
-            
+
             # Search for the hex pattern that might represent TIMS
             # The ESP32 writes: "TIMS" (0x54494D53) + size (0x08000000) + timestamp
             tims_pattern = b'TIMS\x08\x00\x00\x00'  # TIMS + size=8 in little endian
-            
+
             file_content = self.file.read()
             offset = 0
-            
+
             while True:
                 pos = file_content.find(tims_pattern, offset)
                 if pos == -1:
                     break
-                
+
                 # Found the pattern, extract timestamp
                 if pos + 16 <= len(file_content):
                     timestamp_bytes = file_content[pos + 8:pos + 16]
                     try:
                         unix_epoch_ms = struct.unpack('<Q', timestamp_bytes)[0]
-                        
-                        # Accept any positive timestamp for now
+
+                        # **FIX**: Assume timestamp is already in milliseconds, no scale conversion needed.
                         if unix_epoch_ms > 0:
                             self.timestamps.append(TimestampChunk(unix_epoch_ms))
-                            print(f"Found TIMS pattern at position {pos}: {unix_epoch_ms}ms")
+                            print(f"Found TIMS pattern at position {pos}: {unix_epoch_ms} ms")
                             found_any = True
                     except struct.error as e:
                         print(f"Error parsing timestamp at position {pos}: {e}")
-                
-                offset = pos + 1
-        
+
+                offset = pos + 1 # Move to the next byte after the found pattern to continue searching
+
         if not found_any:
             print("No TIMS chunks found. File may not contain timestamp metadata.")
             # Let's also try to dump the first few bytes to see what we're dealing with
@@ -173,9 +163,8 @@ class AVITimestampReader:
             print(f"Header as hex: {header.hex()}")
         else:
             print(f"Found {len(self.timestamps)} TIMS chunks total")
-        
-        return self.timestamps
 
+        return self.timestamps
 
 class VideoProcessor:
     """Processes video files with timestamp overlay and timing correction"""
