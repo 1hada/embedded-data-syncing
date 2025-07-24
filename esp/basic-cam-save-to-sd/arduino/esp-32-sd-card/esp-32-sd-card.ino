@@ -23,6 +23,7 @@
 #include "time.h"
 
 #include "local_server.h"
+#include "visual_processing.h"
 
 // REPLACE WITH YOUR NETWORK CREDENTIALS
 //const char* ssid = "REPLACE_WITH_YOUR_SSID";
@@ -69,6 +70,11 @@ unsigned long lastCaptureTime = 0;
 int currentBrightness = 0;
 int currentContrast = 0;
 
+// For FPS calculation
+unsigned long fps_last_log_time = 0;
+int fps_counter = 0;
+const unsigned long FPS_LOG_INTERVAL_MS = 5000; // Log FPS every 5 seconds (N=5)
+
 // Video recording variables
 File videoFile;
 String currentVideoFilename;
@@ -76,10 +82,6 @@ bool isRecording = false;
 uint32_t frameCount = 0;
 unsigned long videoStartTime = 0;
 uint32_t currentVideoNumber = 0;
-
-// Auto-brightness variables
-unsigned long lastBrightnessCheck = 0;
-const unsigned long BRIGHTNESS_CHECK_INTERVAL = 5000; // Check every 5 seconds
 
 // Add these for dynamic resolution
 uint32_t videoWidth = 0;
@@ -182,19 +184,21 @@ void configInitCamera(){
     config.pin_sccb_scl = SIOC_GPIO_NUM;
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
-    config.xclk_freq_hz = 20000000;
-    config.pixel_format = PIXFORMAT_YUV422;// YUV is optimized for video compared to PIXFORMAT_JPEG
+    //config.xclk_freq_hz = 20000000;
+    config.xclk_freq_hz = 20*1000000;
+    //config.pixel_format = PIXFORMAT_YUV422;
+    config.pixel_format = PIXFORMAT_JPEG;
 
     // Optimized settings for video recording
     if(psramFound()){
-        config.frame_size = FRAMESIZE_QVGA;//FRAMESIZE_XGA;//FRAMESIZE_UXGA; // Set to 1600x1200 as you specified
+        config.frame_size = FRAMESIZE_CIF;
         config.jpeg_quality = 15; // Higher quality for video
         config.fb_count = 2;
     } else {
         // If no PSRAM, UXGA might not be feasible, fall back to a smaller size
         Serial.println("No PSRAM found, falling back to QVGA.");
         config.frame_size = FRAMESIZE_QVGA; // 320x240
-        config.jpeg_quality = 20;
+        config.jpeg_quality = 30;
         config.fb_count = 1;
     }
     
@@ -226,34 +230,7 @@ void configInitCamera(){
             break;
     }
     Serial.printf("Camera Resolution set to: %d x %d\n", videoWidth, videoHeight);
-
-    // Enable hardware auto-exposure (let OV2640 handle it)
-    s->set_vflip(s, 1);      // Vertical flip to correct inversion
-    s->set_hmirror(s, 1);    // Horizontal mirror if needed
-    
-    // Optimized settings for speed
-    s->set_exposure_ctrl(s, 1);    // Enable AEC
-    s->set_aec2(s, 0);             // Disable AEC2 for speed
-    s->set_ae_level(s, 0);         // Neutral AE level
-    
-    s->set_gain_ctrl(s, 1);        // Enable AGC
-    s->set_agc_gain(s, 0);         // Let hardware decide
-    
-    s->set_whitebal(s, 1);         // Enable AWB
-    s->set_awb_gain(s, 1);         // Enable AWB gain
-    
-    // Balanced settings for speed vs quality
-    s->set_brightness(s, 0);       
-    s->set_contrast(s, 0);         // Reduce processing
-    s->set_saturation(s, 0);       
-    s->set_sharpness(s, 0);        // Reduce processing for speed
-    
-    s->set_lenc(s, 0);             // Disable lens correction for speed
-    s->set_denoise(s, 0);          // Disable denoise for speed
-    
-    // Set quality high for license plate detail
-    s->set_quality(s, 63);          // Higher quality (1-63, lower = better)
-    
+    configureCameraForDashCam();
 }
 
 // Connect to WiFi with timeout
@@ -523,14 +500,6 @@ void initMicroSDCard() {
 }
 
 
-
-
-
-
-
-
-
-
 // Create new video file with AVI headers for YUV422 source
 bool createNewVideoFile() {
     if (isRecording) {
@@ -618,64 +587,82 @@ uint64_t getCurrentTimestampMs() {
     }
 }
 
-// Add frame to video file - MAJOR CHANGE: Convert YUV422 to JPEG first
-void addFrameToVideo(camera_fb_t* fb) {
-    if (!isRecording || !videoFile) return;
+
+// Add frame to video file - Handles both YUV422 and JPEG input
+bool addFrameToVideo(camera_fb_t* fb) {
+    if (!isRecording || !videoFile) {
+        if (!isRecording) Serial.println("Not recording.");
+        if (!videoFile) Serial.println("Video file not open.");
+        return false;
+    }
 
     uint64_t frameTimestampMs = getCurrentTimestampMs();
 
-    // Convert YUV422 to JPEG for AVI storage
     size_t jpg_buf_len = 0;
     uint8_t *jpg_buf = NULL;
-    
-    // Convert YUV422 frame to JPEG
-    // Quality 90 for dash cam (balance between quality and size)
-    bool jpeg_converted = frame2jpg(fb, 90, &jpg_buf, &jpg_buf_len);
-    
-    if (!jpeg_converted || !jpg_buf) {
-        Serial.println("YUV422 to JPEG conversion failed!");
-        return;
+    bool jpeg_needs_free = false; // Flag to indicate if we allocated the JPEG buffer
+
+    // Determine if conversion is needed or if it's already JPEG
+    if (fb->format == PIXFORMAT_YUV422) {
+        // Convert YUV422 to JPEG for AVI storage
+        // Quality 90 for dash cam (balance between quality and size)
+        bool jpeg_converted = frame2jpg(fb, 90, &jpg_buf, &jpg_buf_len);
+        if (!jpeg_converted || !jpg_buf) {
+            Serial.println("YUV422 to JPEG conversion failed for video recording!");
+            return false;
+        }
+        jpeg_needs_free = true; // We allocated this buffer, so we need to free it
+    } else if (fb->format == PIXFORMAT_JPEG) {
+        // Already JPEG, use its buffer directly
+        jpg_buf = fb->buf;
+        jpg_buf_len = fb->len;
+        jpeg_needs_free = false; // The camera owns this buffer, we don't free it
+    } else {
+        Serial.printf("Unsupported pixformat %d for video recording!\n", fb->format);
+        return false;
     }
 
-    // Write frame header (MJPG data chunk) - now using converted JPEG
+    // Write frame header (MJPG data chunk)
     char frameHeader[8] = {'0', '0', 'd', 'c', 0, 0, 0, 0};
-    uint32_t frameSize = jpg_buf_len; // Use converted JPEG size
-    memcpy(&frameHeader[4], &frameSize, 4);
-    
+    uint32_t frameSize = jpg_buf_len;
+    memcpy(&frameHeader[4], &frameSize, 4); // Copy the size into the header
+
     if (videoFile.write((uint8_t*)frameHeader, 8) != 8) {
         Serial.println("Error writing frame header!");
-        free(jpg_buf); // Clean up
-        return;
+        if (jpeg_needs_free) free(jpg_buf); // Clean up if we allocated
+        return false;
     }
-    
-    // Write converted JPEG data
+
+    // Write JPEG data
     if (videoFile.write(jpg_buf, jpg_buf_len) != jpg_buf_len) {
-        Serial.println("Error writing converted JPEG frame data!");
-        free(jpg_buf); // Clean up
-        return;
+        Serial.println("Error writing JPEG frame data!");
+        if (jpeg_needs_free) free(jpg_buf); // Clean up if we allocated
+        return false;
     }
-    
+
     // Add padding for JPEG if necessary (AVI requires even-sized chunks)
     if (jpg_buf_len % 2 != 0) {
         uint8_t padding = 0;
         if (videoFile.write(&padding, 1) != 1) {
             Serial.println("Error writing JPEG padding byte!");
-            free(jpg_buf); // Clean up
-            return;
+            if (jpeg_needs_free) free(jpg_buf); // Clean up if we allocated
+            return false;
         }
     }
 
-    // Clean up converted JPEG buffer
-    free(jpg_buf);
+    // Clean up converted JPEG buffer ONLY if we allocated it
+    if (jpeg_needs_free) {
+        free(jpg_buf);
+    }
 
-    // Write the custom Timestamp Chunk (TIMS) - unchanged
+    // Write the custom Timestamp Chunk (TIMS)
     TimestampChunk timsChunk;
     timsChunk.size = sizeof(timsChunk.unix_epoch_ms); // Size of the data payload (8 bytes)
     timsChunk.unix_epoch_ms = frameTimestampMs;
 
     if (videoFile.write((uint8_t*)&timsChunk, sizeof(timsChunk)) != sizeof(timsChunk)) {
         Serial.println("Error writing TIMS chunk!");
-        return;
+        return false;
     }
 
     // Add padding for TIMS chunk if necessary (AVI requires even-sized chunks)
@@ -683,41 +670,60 @@ void addFrameToVideo(camera_fb_t* fb) {
         uint8_t padding = 0;
         if (videoFile.write(&padding, 1) != 1) {
             Serial.println("Error writing TIMS padding byte!");
-            return;
+            return false;
         }
     }
 
     frameCount++;
+    return true;
 }
 
+
 // Enhanced capture function that leverages YUV422 advantages
-void captureVideoFrame() {
+bool captureVideoFrame() {
+    uint64_t t0 = millis();
     // Check if we need a new video file
     if (shouldCreateNewVideoFile()) {
         if (!createNewVideoFile()) {
             Serial.println("Failed to create new video file");
-            delay(1000);
-            return;
+            delay(1000); // Small delay to prevent tight looping on failure
+            return false;
         }
     }
-    
-    // Capture YUV422 frame
+ 
+    // Capture frame (will be whatever the camera is currently configured for - YUV or JPEG)
     camera_fb_t * fb = esp_camera_fb_get();
     if (!fb) {
         Serial.println("Camera capture failed");
-        return;
+        return false;
     }
 
-    // Optional: Monitor YUV422 frame quality
+    // Optional: Monitor frame quality (adjust message based on fb->format)
     if (frameCount % 100 == 0) {
-        Serial.printf("YUV422 Frame #%d: %dx%d, Size: %dKB\n", 
-                      frameCount, fb->width, fb->height, fb->len / 1024);
+        if (fb->format == PIXFORMAT_YUV422) {
+            Serial.printf("YUV422 Frame #%d: %dx%d, Size: %dKB\n", 
+                          frameCount, fb->width, fb->height, fb->len / 1024);
+        } else if (fb->format == PIXFORMAT_JPEG) {
+            Serial.printf("JPEG Frame #%d: %dx%d, Size: %dKB\n",
+                          frameCount, fb->width, fb->height, fb->len / 1024);
+        } else {
+            Serial.printf("Frame #%d (Format: %d): %dx%d, Size: %dKB\n",
+                          frameCount, fb->format, fb->width, fb->height, fb->len / 1024);
+        }
     }
 
-    // Add frame to video (will convert YUV422 to JPEG internally)
-    addFrameToVideo(fb);
+    uint64_t t1 = millis();
+    // Simplified brightness calculation
+    calculateAndManageBrightness(fb, frameCount);
+        // Add frame to video (will convert YUV422 to JPEG internally if needed, or use existing JPEG)
+    addFrameToVideo(fb); // SD write
+    uint64_t t2 = millis();
     
-    esp_camera_fb_return(fb);
+    esp_camera_fb_return(fb); // ALWAYS return the frame buffer once done with it
+    uint64_t t3 = millis();
+    
+    Serial.printf("Frame: %d | Capture: %dms | Write: %dms | Total: %dms\n",
+                  frameCount, t1-t0, t2-t1, t3-t0);
 
     // Print status and flush every 100 frames
     if (frameCount % 100 == 0) {
@@ -726,8 +732,8 @@ void captureVideoFrame() {
         Serial.printf("Video #%d: %s - Frame: %d, Size: %dMB\n", 
                       currentVideoNumber, currentVideoFilename.c_str(), frameCount, sizeMB);
     }
+    return true;
 }
-
 
 
 // Finish and close video file (no changes needed here, still updates totalFrames, etc.)
@@ -767,8 +773,6 @@ bool shouldCreateNewVideoFile() {
     
     return sizeMB >= MAX_VIDEO_SIZE_MB;
 }
-
-
 
 
 
@@ -828,16 +832,30 @@ void loop() {
 
     // Handle the webpage
     server.handleClient();
-    
+
     // Capture at specified interval
     if (currentTime - lastCaptureTime >= CAPTURE_INTERVAL_MS) {
-        captureVideoFrame();
-        lastCaptureTime = currentTime;
-        
-        // Manage SD card space every 1000 frames
-        if (frameCount % 1000 == 0 && frameCount > 0) {
-            manageSdCardSpace();
+        if (captureVideoFrame()){
+          lastCaptureTime = currentTime;
+  
+          // Increment FPS counter for the video capture
+          fps_counter++;
+  
+          // Manage SD card space every 1000 frames
+          if (frameCount % 1000 == 0 && frameCount > 0) {
+              manageSdCardSpace();
+          }
         }
+    }
+
+    // --- FPS Logging Logic ---
+    if (currentTime - fps_last_log_time >= FPS_LOG_INTERVAL_MS) {
+        float current_fps = (float)fps_counter / (FPS_LOG_INTERVAL_MS / 1000.0);
+        Serial.printf("Approx. FPS (last %lu seconds): %.2f, Brightness: %d\n",
+                      FPS_LOG_INTERVAL_MS / 1000, current_fps, brightness);
+        // Reset counters for the next interval
+        fps_counter = 0;
+        fps_last_log_time = currentTime;
     }
 
     // Small delay to prevent overwhelming the system

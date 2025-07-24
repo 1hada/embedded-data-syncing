@@ -1,4 +1,8 @@
+#ifndef LOCAL_SERVER_H
+#define LOCAL_SERVER_H
+
 #include "esp_camera.h"
+#include "visual_processing.h"
 #include <WiFi.h>
 #include <WebServer.h>
 #include <FS.h>
@@ -8,7 +12,7 @@
 const int BUTTON_PIN = 0;
 
 // WiFi settings
-const char* ssid = "espcamap";
+const char* ssid = "ESP32Network";
 char password[10];
 
 // WebServer object on port 80
@@ -21,19 +25,21 @@ bool serverRunning = true;
 static bool camera_configured = false;
 static unsigned long last_debug = 0;
 static unsigned long last_adjustment = 0;
+static int brightness = -1;
 
 // Function prototypes
 void generateRandomPassword();
 void startCameraServer();
 void stopCameraServer();
 void handleRoot();
-void handleYuvStream();
+void handleStream();
 void handleFileList();
 String getContentType(String filename);
 bool setupCamera();
 void setupSDCard();
 void checkButtonPress();
 void adjustExposureCompensation(int level);
+void calculateAndManageBrightness(camera_fb_t *fb, int frame_count);
 
 void setupServer() {
   generateRandomPassword();
@@ -49,7 +55,7 @@ void setupServer() {
   Serial.println("Connect to this AP and navigate to http://" + IP.toString() + " in your browser.");
   
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/stream", HTTP_GET, handleYuvStream);
+  server.on("/stream", HTTP_GET, handleStream);
   server.on("/files", HTTP_GET, handleFileList);
   
   server.begin();
@@ -58,8 +64,7 @@ void setupServer() {
 void generateRandomPassword() {
   const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   for (int i = 0; i < 8; i++) {
-    // FOR TESTING the random password is removed //     password[i] = charset[random(0, sizeof(charset) - 1)];
-    password[i] = charset[i];
+    password[i] = charset[random(0, sizeof(charset) - 1)];
   }
   password[8] = '\0';
 }
@@ -140,187 +145,177 @@ void configureCameraForDashCam() {
   sensor_t *s = esp_camera_sensor_get();
   if (!s) return;
 
-  // Enable hardware auto-exposure (let OV2640 handle it)
-  s->set_vflip(s, 1);      // Vertical flip to correct inversion
-  s->set_hmirror(s, 1);    // Horizontal mirror if needed
-  
-  // Optimized settings for speed
-  s->set_exposure_ctrl(s, 1);    // Enable AEC
-  s->set_aec2(s, 0);             // Disable AEC2 for speed
-  s->set_ae_level(s, 0);         // Neutral AE level
-  
-  s->set_gain_ctrl(s, 1);        // Enable AGC
-  s->set_agc_gain(s, 0);         // Let hardware decide
-  
-  s->set_whitebal(s, 1);         // Enable AWB
-  s->set_awb_gain(s, 1);         // Enable AWB gain
-  
-  // Balanced settings for speed vs quality
-  s->set_brightness(s, 0);       
-  s->set_contrast(s, 0);         // Reduce processing
-  s->set_saturation(s, 0);       
-  s->set_sharpness(s, 0);        // Reduce processing for speed
-  
-  s->set_lenc(s, 0);             // Disable lens correction for speed
-  s->set_denoise(s, 0);          // Disable denoise for speed
-  
-  // Set quality high for license plate detail
-  s->set_quality(s, 63);          // Higher quality (1-63, lower = better)
-  
+  s->set_quality(s, 10);
+  s->set_contrast(s, 0);
+  s->set_brightness(s, 0);
+  s->set_saturation(s, 0);
+  s->set_gainceiling(s, (gainceiling_t)20);
+  s->set_colorbar(s, false);
+  //s->set_whitebal(s, val);
+  //s->set_gain_ctrl(s, val);
+  //s->set_exposure_ctrl(s, val);
+  s->set_hmirror(s, false);
+  s->set_vflip(s, false);
+  s->set_awb_gain(s, false);
+  s->set_agc_gain(s, false);
+  //s->set_aec_value(s, 2);
+  s->set_aec2(s, true);
+  s->set_dcw(s, false);
+  s->set_bpc(s, false);
+  s->set_wpc(s, true);
+  s->set_raw_gma(s, true);
+  s->set_lenc(s, false);
+  //s->set_special_effect(s, val);
+  //s->set_wb_mode(s, val);
+  s->set_ae_level(s, 2);
   delay(500); // Reduced stabilization time
   
   Serial.println("Camera configured for speed with correct orientation");
 }
 
-// Simplified brightness calculation with sampling
-int calculateBrightnessYUV422(camera_fb_t *fb) {
-  if (!fb || fb->len == 0) return -1;
-  
-  // More aggressive sampling for speed
-  uint32_t total_brightness = 0;
-  int sample_count = 0;
-  int step = 16; // Larger step for faster processing
-  
-  for (int i = 0; i < fb->len && i < 8000; i += step) { // Limit samples
-    total_brightness += fb->buf[i];
-    sample_count++;
-  }
-  
-  return sample_count > 0 ? total_brightness / sample_count : -1;
-}
+void calculateAndManageBrightness(camera_fb_t *fb, int frame_count) {
+  // Simplified brightness calculation (less frequent)
+  if (frame_count % 20 != 0) return; // Only every 20th frame
 
-// Simplified auto-exposure with less frequent adjustments
-void manageAutoExposure(int current_brightness) {
-  static int current_compensation = 0;
-  const unsigned long adjustment_interval = 3000; // Slower adjustments
-  
-  if (millis() - last_adjustment < adjustment_interval) return;
-  
-  const int target_brightness = 140;
-  const int tolerance = 40; // Wider tolerance
-  
-  int brightness_diff = target_brightness - current_brightness;
-  
-  if (abs(brightness_diff) > tolerance) {
-    int new_compensation = current_compensation;
-    
-    if (brightness_diff > 60) {
-      new_compensation = std::min(current_compensation + 1, 2);
-    } else if (brightness_diff < -60) {
-      new_compensation = std::max(current_compensation - 1, -2);
-    }
-    
-    if (new_compensation != current_compensation) {
-      adjustExposureCompensation(new_compensation);
-      current_compensation = new_compensation;
-      Serial.printf("Auto-exposure: Brightness %d, Compensation: %d\n", 
-                    current_brightness, new_compensation);
-    }
-    
-    last_adjustment = millis();
+  int prev_brightness = brightness ;
+
+  if (fb->format == PIXFORMAT_YUV422) {
+    brightness = calculateBrightnessYUV422(fb);
+  } else if (fb->format == PIXFORMAT_JPEG) {
+    // Use a thumbnail or other method internally
+    brightness = calculateBrightnessJPEG(fb);
+  } else {
+    Serial.printf("Brightness calculation not supported for pixformat: %d\n", fb->format);
+    return;
+  }
+
+  if (brightness != prev_brightness) {
+    manageAutoExposure(brightness);
   }
 }
 
-void handleYuvStream() {
-  Serial.println("Serving optimized YUV422→JPEG stream...");
+void handleStream() { // Renamed from handleStream for broader applicability
+  Serial.println("Serving camera stream...");
   WiFiClient client = server.client();
-  
+
   // Optimized HTTP headers
   client.println("HTTP/1.1 200 OK");
   client.println("Content-Type: multipart/x-mixed-replace; boundary=--jpgboundary");
   client.println("Access-Control-Allow-Origin: *");
   client.println("Cache-Control: no-cache");
   client.println();
-  
+
   // Configure camera once
   if (!camera_configured) {
     configureCameraForDashCam();
     camera_configured = true;
   }
-  
+
   camera_fb_t *fb = NULL;
   size_t _jpg_buf_len = 0;
   uint8_t *_jpg_buf = NULL;
-  
+  bool jpeg_needs_free = false; // Flag to indicate if _jpg_buf needs to be freed
+
   // Performance tracking
   unsigned long frame_start, conversion_time;
   int frame_count = 0;
   unsigned long fps_start = millis();
-  
+  // last_debug is assumed to be a global/class member as per original code
+
   while (client.connected()) {
     frame_start = millis();
-    
+
     fb = esp_camera_fb_get();
     if (!fb) {
       Serial.println("Camera capture failed");
       delay(50);
       continue;
     }
-    
-    // Simplified brightness calculation (less frequent)
-    int brightness = -1;
-    if (frame_count % 10 == 0) { // Only every 10th frame
-      brightness = calculateBrightnessYUV422(fb);
-      if (brightness >= 0) {
-        manageAutoExposure(brightness);
+
+    // Simplified brightness calculation
+    calculateAndManageBrightness(fb, frame_count);
+
+    // Handle different pixel formats
+    if (fb->format == PIXFORMAT_YUV422) {
+      // Convert YUV422 to JPEG with optimized quality
+      bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len); // Reduced quality for speed
+      jpeg_needs_free = true; // We allocated a new JPEG buffer, so it needs to be freed
+      conversion_time = millis() - frame_start;
+
+      esp_camera_fb_return(fb); // Return the YUV frame buffer
+      fb = NULL;
+
+      if (!jpeg_converted || !_jpg_buf) {
+        Serial.println("YUV422→JPEG conversion failed");
+        delay(10);
+        continue;
       }
-    }
-    
-    // Convert YUV422 to JPEG with optimized quality
-    bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len); // Reduced quality for speed
-    conversion_time = millis() - frame_start;
-    
-    esp_camera_fb_return(fb);
-    fb = NULL;
-    
-    if (!jpeg_converted || !_jpg_buf) {
-      Serial.println("YUV422→JPEG conversion failed");
+    } else if (fb->format == PIXFORMAT_JPEG) {
+      // If the camera directly provides JPEG, use its buffer
+      _jpg_buf = fb->buf;
+      _jpg_buf_len = fb->len;
+      jpeg_needs_free = false; // The camera frame buffer will be returned, not explicitly freed here
+      conversion_time = millis() - frame_start; // Time taken is just capture time
+
+      // Return the frame buffer *after* using its data
+      esp_camera_fb_return(fb);
+      fb = NULL;
+
+      if (!_jpg_buf) {
+        Serial.println("JPEG buffer is null from camera");
+        delay(10);
+        continue;
+      }
+    } else {
+      Serial.printf("Unsupported pixel format: %d\n", fb->format);
+      esp_camera_fb_return(fb);
+      fb = NULL;
       delay(10);
       continue;
     }
-    
+
     // Send multipart boundary and headers
     client.println("--jpgboundary");
     client.println("Content-Type: image/jpeg");
     client.println("Content-Length: " + String(_jpg_buf_len));
     client.println();
-    
-    // Send the converted JPEG data
+
+    // Send the JPEG data
     client.write(_jpg_buf, _jpg_buf_len);
     client.println();
-    
-    // Clean up
-    free(_jpg_buf);
-    _jpg_buf = NULL;
-    
+
+    // Clean up if the JPEG buffer was allocated by us
+    if (jpeg_needs_free && _jpg_buf) {
+      free(_jpg_buf);
+      _jpg_buf = NULL;
+    }
+
     frame_count++;
-    
+
     // Performance stats every 5 seconds
     if (millis() - last_debug > 5000) {
       unsigned long elapsed = millis() - fps_start;
       float fps = (frame_count * 1000.0) / elapsed;
-      Serial.printf("FPS: %.1f, Avg conversion: %lums, Brightness: %d\n", 
+      Serial.printf("FPS: %.1f, Avg conversion/capture: %lums, Brightness: %d\n",
                     fps, conversion_time, brightness);
       last_debug = millis();
       frame_count = 0;
       fps_start = millis();
     }
-    
+
     // Minimal delay for maximum speed
     delay(10);
   }
-  
-  Serial.println("Client disconnected from optimized stream.");
-}
 
-void adjustExposureCompensation(int level) {
-  sensor_t *s = esp_camera_sensor_get();
-  if (!s) return;
-  
-  level = constrain(level, -2, 2);
-  s->set_ae_level(s, level);
-  
-  Serial.printf("Exposure compensation set to: %d\n", level);
+  // Ensure any lingering fb or _jpg_buf is freed if client disconnects mid-loop
+  if (fb) { // If loop exited with an active fb
+    esp_camera_fb_return(fb);
+  }
+  if (jpeg_needs_free && _jpg_buf) { // If loop exited with an active _jpg_buf needing free
+    free(_jpg_buf);
+  }
+
+  Serial.println("Client disconnected from stream.");
 }
 
 void handleFileList() {
@@ -373,3 +368,5 @@ String getContentType(String filename) {
   else if (filename.endsWith(".gz")) return "application/x-gzip";
   return "text/plain";
 }
+
+#endif // LOCAL_SERVER_H
