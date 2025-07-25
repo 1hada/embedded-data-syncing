@@ -1,0 +1,21 @@
+# USB16MP01 - cameras
+#
+
+# /etc/udev/rules.d/99-usb-camera.rules
+#
+
+
+# /etc/udev/rules.d/99-usb-camera.rules
+
+# Camera LR
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", ATTRS{devpath}=="*.1", SYMLINK+="camera_lr" , MODE="777", GROUP="plugdev"
+
+# Camera UR
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", ATTRS{devpath}=="*.2", SYMLINK+="camera_ur", MODE="777", GROUP="plugdev"
+
+# Camera UL
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", ATTRS{devpath}=="*.3", SYMLINK+="camera_ul", MODE="777", GROUP="plugdev"
+
+# Camera LL
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", ATTRS{devpath}=="*.4", SYMLINK+="camera_ll", MODE="777", GROUP="plugdev"
+

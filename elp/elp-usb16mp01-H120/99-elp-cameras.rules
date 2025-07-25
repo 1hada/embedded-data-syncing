@@ -1,0 +1,18 @@
+# Create udev rules file for ELP USB cameras
+# Save this as /etc/udev/rules.d/99-elp-cameras.rules
+
+# Rule for ELP 16MP USB Camera (idVendor=32e4, idProduct=0298)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", MODE="0666", GROUP="video"
+
+# Create predictable device names based on USB port/serial
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", ATTRS{serial}=="*", SYMLINK+="elp-camera-$attr{serial}"
+
+# Alternative rule using USB bus/port for consistent naming
+SUBSYSTEM=="video4linux", KERNELS=="*", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", SYMLINK+="elp-camera-%k"
+
+# Ensure video group permissions
+SUBSYSTEM=="video4linux", GROUP="video", MODE="0664"
+
+# For multiple cameras, you can also create specific names based on USB topology
+# This creates names like /dev/elp-camera-1-8 for USB port 1-8
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="0298", KERNELS=="1-*", SYMLINK+="elp-camera-$attr{busnum}-$attr{devnum}"
