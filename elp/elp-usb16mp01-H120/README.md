@@ -111,3 +111,13 @@ sudo vim /etc/X11/xorg.conf
 sudo vim /etc/update-manager/release-upgrades
 sudo reboot
 ```
+
+
+# Set up video saving partition
+```
+# List all block devices and their partitions
+lsblk
+
+# List partition tables (more detailed, requires sudo)
+sudo fdisk -l
+```

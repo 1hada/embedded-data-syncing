@@ -28,13 +28,16 @@ import sys
 from flask import Flask, Response, render_template
 
 # --- Configuration Constants ---
-ADJUSTMENT_INTERVAL = 7  # Seconds between image adjustments
-BRIGHTNESS_TARGET_LOW = 80 # Target average pixel value for "not too dark"
-BRIGHTNESS_TARGET_HIGH = 120 # Target average pixel value for "not too bright"
-ADJUSTMENT_STEP_EXPOSURE = 50 # How much to change exposure by
-ADJUSTMENT_STEP_BRIGHTNESS = 10 # How much to change brightness by
-ADJUSTMENT_STEP_CONTRAST = 10 # How much to change contrast by
-ADJUSTMENT_STEP_GAIN = 5 # How much to change gain by
+ADJUSTMENT_INTERVAL = 1  # Seconds between image adjustments
+BRIGHTNESS_TARGET_LOW = 90 # Target average pixel value for "not too dark"
+BRIGHTNESS_TARGET_HIGH = 110 # Target average pixel value for "not too bright"
+ADJUSTMENT_STEP_EXPOSURE = 25 # Base amount to change exposure by
+ADJUSTMENT_STEP_BRIGHTNESS = 5 # Base amount to change brightness by
+ADJUSTMENT_STEP_CONTRAST = 5 # Base amount to change contrast by
+ADJUSTMENT_STEP_GAIN = 15 # Base amount to change gain by
+
+# NEW: Scaling factor for dynamic adjustments
+BRIGHTNESS_DEVIATION_SCALE = 0.5 # Adjust this value: higher means more aggressive scaling
 
 # Define common camera setting ranges (these are typical, might need fine-tuning for your specific camera)
 # !!! UPDATED BASED ON v4l2-ctl -d /dev/video2 -L OUTPUT !!!
@@ -55,6 +58,15 @@ SETTING_RANGES = {
     'pan_absolute': {'min': -36000, 'max': 36000}, # If your camera supports it
     'tilt_absolute': {'min': -36000, 'max': 36000}, # If your camera supports it
     'zoom_absolute': {'min': 0, 'max': 9}, # If your camera supports it
+}
+
+# --- Default Camera Settings ---
+DEFAULT_CAMERA_SETTINGS = {
+    'exposure_time_absolute': 500,  # A moderate exposure time (e.g., 100-1000)
+    'brightness': 0,                # Neutral brightness
+    'contrast': 32,                 # Mid-range contrast
+    'gain': 0,                      # Low gain to reduce noise, increased by auto-adjust if needed
+    'white_balance_temperature': 4000 # A neutral white balance temperature, if auto WB is off
 }
 
 
@@ -170,6 +182,39 @@ class CameraInspector:
         
         return True
     
+    def set_default_camera_settings(self):
+        """
+        Sets predefined default settings for the camera using v4l2-ctl.
+        This is called once upon initialization.
+        """
+        if not self.real_device_path or not os.path.exists(self.real_device_path):
+            print(f"[{self.camera_name}] Cannot set default settings: real device path not available.")
+            return
+
+        print(f"[{self.camera_name}] Applying default camera settings...")
+
+        # Ensure auto exposure is manual and auto white balance is off first
+        self.set_camera_setting('auto_exposure', SETTING_RANGES['auto_exposure']['manual'])
+        self.set_camera_setting('white_balance_automatic', SETTING_RANGES['white_balance_automatic']['off'])
+        time.sleep(0.1) # Give camera time to switch modes
+
+        for setting, default_value in DEFAULT_CAMERA_SETTINGS.items():
+            # Check if the setting is valid for this camera (optional, but good for robustness)
+            if setting in SETTING_RANGES:
+                # Clamp the default value to the defined range
+                min_val = SETTING_RANGES[setting].get('min', default_value)
+                max_val = SETTING_RANGES[setting].get('max', default_value)
+                clamped_value = max(min_val, min(default_value, max_val))
+                
+                if self.set_camera_setting(setting, clamped_value):
+                    print(f"[{self.camera_name}] Set default {setting} to {clamped_value}.")
+                else:
+                    print(f"[{self.camera_name}] Failed to set default {setting} to {clamped_value}.")
+            else:
+                print(f"[{self.camera_name}] Warning: Default setting '{setting}' not in SETTING_RANGES, skipping.")
+        time.sleep(0.2) # Small pause after applying all defaults
+
+
     def set_camera_setting(self, setting_name, value):
         """
         Set a camera property using v4l2-ctl.
@@ -318,6 +363,9 @@ class CameraInspector:
         """Start camera capture"""
         if not self.initialize_camera():
             return False
+        
+        # NEW: Set default settings immediately after camera initialization but before starting capture
+        self.set_default_camera_settings()
             
         self.running = True
         self.capture_thread = threading.Thread(target=self.capture_frames)
@@ -443,102 +491,111 @@ def calculate_brightness_level(frame):
 def adjust_image_settings(camera: CameraInspector, current_brightness: float):
     """
     Automatically adjusts camera settings (exposure, brightness, contrast, gain)
-    based on the current image brightness level.
+    based on the current image brightness level. Prioritizes mixing adjustments,
+    with larger steps when deviation from target is high.
     """
     cam_name = camera.camera_name
     real_device = camera.real_device_path
 
     if not real_device or not os.path.exists(real_device):
         return
-
-    # !!! UPDATED: Control name is 'auto_exposure' !!!
-    current_auto_exposure = camera.get_camera_setting('auto_exposure')
-    
+    """
     # Ensure camera is in manual exposure mode for adjustments
-    # !!! UPDATED: Manual mode value is 1 for your camera !!!
-    if current_auto_exposure != SETTING_RANGES['auto_exposure']['manual']:
+    if camera.get_camera_setting('auto_exposure') != SETTING_RANGES['auto_exposure']['aperture_priority']:
+        camera.set_camera_setting('auto_exposure', SETTING_RANGES['auto_exposure']['aperture_priority'])
+        time.sleep(0.05) # Give camera time to apply change
+    """
+    # Ensure camera is in manual exposure mode for adjustments
+    if camera.get_camera_setting('auto_exposure') != SETTING_RANGES['auto_exposure']['manual']:
         camera.set_camera_setting('auto_exposure', SETTING_RANGES['auto_exposure']['manual'])
         time.sleep(0.05) # Give camera time to apply change
-    
-    # !!! UPDATED: Control name is 'exposure_time_absolute' !!!
+    adjusted_any_setting = False
+
+    # Get current settings and their ranges
     current_exposure = camera.get_camera_setting('exposure_time_absolute')
-    exposure_min = SETTING_RANGES.get('exposure_time_absolute', {}).get('min', 1) # Default to 1
-    exposure_max = SETTING_RANGES.get('exposure_time_absolute', {}).get('max', 5000) # Default to 5000
+    exposure_min = SETTING_RANGES.get('exposure_time_absolute', {}).get('min', 1)
+    exposure_max = SETTING_RANGES.get('exposure_time_absolute', {}).get('max', 5000)
 
-    if current_exposure is not None:
-        if current_brightness < BRIGHTNESS_TARGET_LOW:
-            if current_exposure < exposure_max:
-                new_exposure = min(current_exposure + ADJUSTMENT_STEP_EXPOSURE, exposure_max)
-                print(f"[{cam_name}] Image too dark ({current_brightness:.2f}). Increasing exposure_time_absolute from {current_exposure} to {new_exposure}.")
-                camera.set_camera_setting('exposure_time_absolute', new_exposure)
-                return # Only adjust one major setting at a time
-
-        elif current_brightness > BRIGHTNESS_TARGET_HIGH:
-            if current_exposure > exposure_min:
-                new_exposure = max(current_exposure - ADJUSTMENT_STEP_EXPOSURE, exposure_min)
-                print(f"[{cam_name}] Image too bright ({current_brightness:.2f}). Decreasing exposure_time_absolute from {current_exposure} to {new_exposure}.")
-                camera.set_camera_setting('exposure_time_absolute', new_exposure)
-                return # Only adjust one major setting at a time
-
-    # If exposure is at limits or not adjustable, try brightness
     current_brightness_val = camera.get_camera_setting('brightness')
-    brightness_min = SETTING_RANGES.get('brightness', {}).get('min', -64) # Updated range
-    brightness_max = SETTING_RANGES.get('brightness', {}).get('max', 64) # Updated range
+    brightness_min = SETTING_RANGES.get('brightness', {}).get('min', -64)
+    brightness_max = SETTING_RANGES.get('brightness', {}).get('max', 64)
 
-    if current_brightness_val is not None:
-        if current_brightness < BRIGHTNESS_TARGET_LOW:
-            if current_brightness_val < brightness_max:
-                new_val = min(current_brightness_val + ADJUSTMENT_STEP_BRIGHTNESS, brightness_max)
-                print(f"[{cam_name}] Image too dark ({current_brightness:.2f}). Increasing brightness from {current_brightness_val} to {new_val}.")
-                camera.set_camera_setting('brightness', new_val)
-                return
-
-        elif current_brightness > BRIGHTNESS_TARGET_HIGH:
-            if current_brightness_val > brightness_min:
-                new_val = max(current_brightness_val - ADJUSTMENT_STEP_BRIGHTNESS, brightness_min)
-                print(f"[{cam_name}] Image too bright ({current_brightness:.2f}). Decreasing brightness from {current_brightness_val} to {new_val}.")
-                camera.set_camera_setting('brightness', new_val)
-                return
-
-    # Then contrast
     current_contrast = camera.get_camera_setting('contrast')
-    contrast_min = SETTING_RANGES.get('contrast', {}).get('min', 0) # Updated range
-    contrast_max = SETTING_RANGES.get('contrast', {}).get('max', 64) # Updated range
-
-    if current_contrast is not None:
-        if current_brightness < BRIGHTNESS_TARGET_LOW:
-            if current_contrast < contrast_max:
-                new_val = min(current_contrast + ADJUSTMENT_STEP_CONTRAST, contrast_max)
-                print(f"[{cam_name}] Image too dark ({current_brightness:.2f}). Increasing contrast from {current_contrast} to {new_val}.")
-                camera.set_camera_setting('contrast', new_val)
-                return
-        elif current_brightness > BRIGHTNESS_TARGET_HIGH:
-            if current_contrast > contrast_min:
-                new_val = max(current_contrast - ADJUSTMENT_STEP_CONTRAST, contrast_min)
-                print(f"[{cam_name}] Image too bright ({current_brightness:.2f}). Decreasing contrast from {current_contrast} to {new_val}.")
-                camera.set_camera_setting('contrast', new_val)
-                return
+    contrast_min = SETTING_RANGES.get('contrast', {}).get('min', 0)
+    contrast_max = SETTING_RANGES.get('contrast', {}).get('max', 64)
             
-    # Finally, gain
     current_gain = camera.get_camera_setting('gain')
-    gain_min = SETTING_RANGES.get('gain', {}).get('min', 0) # Updated range
-    gain_max = SETTING_RANGES.get('gain', {}).get('max', 100) # Updated range
+    gain_min = SETTING_RANGES.get('gain', {}).get('min', 0)
+    gain_max = SETTING_RANGES.get('gain', {}).get('max', 100)
 
-    if current_gain is not None:
-        if current_brightness < BRIGHTNESS_TARGET_LOW:
-            if current_gain < gain_max:
-                new_val = min(current_gain + ADJUSTMENT_STEP_GAIN, gain_max)
-                print(f"[{cam_name}] Image too dark ({current_brightness:.2f}). Increasing gain from {current_gain} to {new_val}.")
-                camera.set_camera_setting('gain', new_val)
-                return
-        elif current_brightness > BRIGHTNESS_TARGET_HIGH:
-            if current_gain > gain_min:
-                new_val = max(current_gain - ADJUSTMENT_STEP_GAIN, gain_min)
-                print(f"[{cam_name}] Image too bright ({current_brightness:.2f}). Decreasing gain from {current_gain} to {new_val}.")
-                camera.set_camera_setting('gain', new_val)
-                return
+    if current_brightness < BRIGHTNESS_TARGET_LOW:
+        # Image is too dark: Increase exposure, brightness, contrast, gain
+        deviation = BRIGHTNESS_TARGET_LOW - current_brightness
+        # Calculate dynamic step size, ensuring it's at least the base step
+        dynamic_step_exposure = max(ADJUSTMENT_STEP_EXPOSURE, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_EXPOSURE / 50)))
+        dynamic_step_brightness = max(ADJUSTMENT_STEP_BRIGHTNESS, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_BRIGHTNESS / 10)))
+        dynamic_step_contrast = max(ADJUSTMENT_STEP_CONTRAST, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_CONTRAST / 10)))
+        dynamic_step_gain = max(ADJUSTMENT_STEP_GAIN, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_GAIN / 5)))
+        
+        if current_exposure is not None and current_exposure < exposure_max:
+            new_exposure = min(current_exposure + dynamic_step_exposure, exposure_max)
+            if camera.set_camera_setting('exposure_time_absolute', new_exposure):
+                print(f"[{cam_name}] Dark ({current_brightness:.2f}). Inc exposure ({dynamic_step_exposure}): {current_exposure}->{new_exposure}.")
+                adjusted_any_setting = True
 
-    # print(f"[{cam_name}] Brightness within target range or no further adjustment possible.")
+        if current_brightness_val is not None and current_brightness_val < brightness_max:
+            new_val = min(current_brightness_val + dynamic_step_brightness, brightness_max)
+            if camera.set_camera_setting('brightness', new_val):
+                print(f"[{cam_name}] Dark ({current_brightness:.2f}). Inc brightness ({dynamic_step_brightness}): {current_brightness_val}->{new_val}.")
+                adjusted_any_setting = True
+
+        if current_contrast is not None and current_contrast < contrast_max:
+            new_val = min(current_contrast + dynamic_step_contrast, contrast_max)
+            if camera.set_camera_setting('contrast', new_val):
+                print(f"[{cam_name}] Dark ({current_brightness:.2f}). Inc contrast ({dynamic_step_contrast}): {current_contrast}->{new_val}.")
+                adjusted_any_setting = True
+            
+        if current_gain is not None and current_gain < gain_max:
+            new_val = min(current_gain + dynamic_step_gain, gain_max)
+            if camera.set_camera_setting('gain', new_val):
+                print(f"[{cam_name}] Dark ({current_brightness:.2f}). Inc gain ({dynamic_step_gain}): {current_gain}->{new_val}.")
+                adjusted_any_setting = True
+
+    elif current_brightness > BRIGHTNESS_TARGET_HIGH:
+        # Image is too bright: Decrease exposure, brightness, contrast, gain
+        deviation = current_brightness - BRIGHTNESS_TARGET_HIGH
+        # Calculate dynamic step size, ensuring it's at least the base step
+        dynamic_step_exposure = max(ADJUSTMENT_STEP_EXPOSURE, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_EXPOSURE / 50)))
+        dynamic_step_brightness = max(ADJUSTMENT_STEP_BRIGHTNESS, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_BRIGHTNESS / 10)))
+        dynamic_step_contrast = max(ADJUSTMENT_STEP_CONTRAST, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_CONTRAST / 10)))
+        dynamic_step_gain = max(ADJUSTMENT_STEP_GAIN, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_GAIN / 5)))
+
+        if current_exposure is not None and current_exposure > exposure_min:
+            new_exposure = max(current_exposure - dynamic_step_exposure, exposure_min)
+            if camera.set_camera_setting('exposure_time_absolute', new_exposure):
+                print(f"[{cam_name}] Bright ({current_brightness:.2f}). Dec exposure ({dynamic_step_exposure}): {current_exposure}->{new_exposure}.")
+                adjusted_any_setting = True
+
+        if current_brightness_val is not None and current_brightness_val > brightness_min:
+            new_val = max(current_brightness_val - dynamic_step_brightness, brightness_min)
+            if camera.set_camera_setting('brightness', new_val):
+                print(f"[{cam_name}] Bright ({current_brightness:.2f}). Dec brightness ({dynamic_step_brightness}): {current_brightness_val}->{new_val}.")
+                adjusted_any_setting = True
+
+        if current_contrast is not None and current_contrast > contrast_min:
+            new_val = max(current_contrast - dynamic_step_contrast, contrast_min)
+            if camera.set_camera_setting('contrast', new_val):
+                print(f"[{cam_name}] Bright ({current_brightness:.2f}). Dec contrast ({dynamic_step_contrast}): {current_contrast}->{new_val}.")
+                adjusted_any_setting = True
+            
+        if current_gain is not None and current_gain > gain_min:
+            new_val = max(current_gain - dynamic_step_gain, gain_min)
+            if camera.set_camera_setting('gain', new_val):
+                print(f"[{cam_name}] Bright ({current_brightness:.2f}). Dec gain ({dynamic_step_gain}): {current_gain}->{new_val}.")
+                adjusted_any_setting = True
+
+    if not adjusted_any_setting:
+        print(f"[{cam_name}] Brightness within target range or no further adjustment possible.")
 
 
 class MultiCameraInspector:
@@ -595,7 +652,7 @@ class MultiCameraInspector:
                     max_resolution=self.max_resolution,
                     real_device_path=cam_info['real_device'] # Pass the real device path
                 )
-                if camera.start():
+                if camera.start(): # The .start() method now calls set_default_camera_settings
                     self.cameras[cam_id] = camera
                     print(f"✓ {cam_info['name']} initialized successfully")
                 else:
@@ -667,206 +724,220 @@ class MultiCameraInspector:
         # Main loop for CLI interaction
         try:
             while self.running:
-                user_input = input("Enter command ('q', 's', 'r', 'p', 'c'): ").strip().lower()
-
+                user_input = input("Enter command ('q', 's', 'r', 'p', 'c' for settings): ").strip().lower()
                 if user_input == 'q':
                     self.running = False
-                    break
                 elif user_input == 's':
-                    self.save_current_frames()
+                    print("Saving current frames for all active cameras...")
+                    for cam_id, camera in self.cameras.items():
+                        frame_info = camera.get_latest_frame()
+                        if frame_info and frame_info['frame'] is not None:
+                            filepath = camera.save_frame(frame_info['frame'], frame_info['timestamp'])
+                            if filepath:
+                                print(f"  {camera.camera_name}: Frame saved to {filepath}")
+                            else:
+                                print(f"  {camera.camera_name}: Failed to save frame.")
                 elif user_input == 'r':
-                    self.reset_counters()
+                    print("Resetting frame counters for all cameras.")
+                    for cam_id, camera in self.cameras.items():
+                        camera.frame_count = 0
+                        camera.dropped_frames = 0
+                        camera.fps_counter.clear()
+                    print("Counters reset.")
                 elif user_input == 'p':
-                    self.print_stats()
+                    print("\n--- Camera Statistics ---")
+                    if not self.cameras:
+                        print("No cameras active.")
+                    for cam_id, camera in self.cameras.items():
+                        print(f"\n[{camera.camera_name} ({cam_id})]:")
+                        print(f"  FPS: {camera.get_fps():.2f}")
+                        print(f"  Total Frames: {camera.frame_count}")
+                        print(f"  Dropped Frames: {camera.dropped_frames}")
+                        print(f"  Queue Size: {camera.frame_queue.qsize()}")
+                        
+                        # Get and print current camera settings
+                        if camera.real_device_path and os.path.exists(camera.real_device_path):
+                            print("  Current v4l2-ctl Settings:")
+                            for setting_name in ['exposure_time_absolute', 'brightness', 'contrast', 'gain', 'white_balance_temperature', 'auto_exposure', 'white_balance_automatic']:
+                                value = camera.get_camera_setting(setting_name)
+                                print(f"    {setting_name}: {value}")
+                        else:
+                            print("  v4l2-ctl settings not available (real device path missing).")
+
+                    print("-------------------------\n")
                 elif user_input == 'c':
                     self.setting_prompt_active = True
-                    self.prompt_camera_settings()
+                    print("\n--- Change Camera Settings ---")
+                    if not self.cameras:
+                        print("No cameras active to change settings for.")
+                        self.setting_prompt_active = False
+                        continue
+
+                    print("Available cameras:")
+                    for idx, (cam_id, camera) in enumerate(self.cameras.items()):
+                        print(f"{idx+1}. {camera.camera_name} ({cam_id})")
+                    
+                    cam_choice = input("Select camera by number (or 'q' to cancel): ").strip()
+                    if cam_choice.lower() == 'q':
+                        self.setting_prompt_active = False
+                        continue
+                    
+                    try:
+                        cam_index = int(cam_choice) - 1
+                        selected_cam_id = list(self.cameras.keys())[cam_index]
+                        selected_camera = self.cameras[selected_cam_id]
+                    except (ValueError, IndexError):
+                        print("Invalid camera selection.")
+                        self.setting_prompt_active = False
+                        continue
+
+                    print(f"\nChanging settings for {selected_camera.camera_name} ({selected_cam_id}).")
+                    print("Available settings and their ranges (from SETTING_RANGES):")
+                    for setting_name, s_range in SETTING_RANGES.items():
+                        current_val = selected_camera.get_camera_setting(setting_name)
+                        if 'min' in s_range and 'max' in s_range:
+                            print(f"  {setting_name} (Current: {current_val}, Range: {s_range['min']}-{s_range['max']})")
+                        elif 'manual' in s_range: # For auto_exposure
+                             print(f"  {setting_name} (Current: {current_val}, Options: manual={s_range['manual']}, aperture_priority={s_range['aperture_priority']})")
+                        elif 'off' in s_range: # For white_balance_automatic
+                             print(f"  {setting_name} (Current: {current_val}, Options: off={s_range['off']}, on={s_range['on']})")
+                        else:
+                            print(f"  {setting_name} (Current: {current_val}, Range: Not defined)")
+
+                    setting_name = input("Enter setting name to change (e.g., 'exposure_time_absolute', 'gain', or 'q' to cancel): ").strip().lower()
+                    if setting_name.lower() == 'q':
+                        self.setting_prompt_active = False
+                        continue
+
+                    if setting_name not in SETTING_RANGES:
+                        print(f"'{setting_name}' is not a recognized setting or its range is not defined. Please check spelling.")
+                        self.setting_prompt_active = False
+                        continue
+                    
+                    # Special handling for boolean/enum settings
+                    if 'manual' in SETTING_RANGES[setting_name] or 'off' in SETTING_RANGES[setting_name]:
+                        print(f"Valid options for {setting_name}: {SETTING_RANGES[setting_name]}")
+                        value_input = input(f"Enter new value for {setting_name} (e.g., '{SETTING_RANGES[setting_name].get('manual', SETTING_RANGES[setting_name].get('off'))}'): ").strip()
+                    else:
+                        value_input = input(f"Enter new value for {setting_name} (Current: {selected_camera.get_camera_setting(setting_name)}, Range: {SETTING_RANGES[setting_name].get('min')}-{SETTING_RANGES[setting_name].get('max')}): ").strip()
+                    
+                    try:
+                        # Attempt to convert to int, if it fails, keep as string (for enum values)
+                        new_value = int(value_input)
+                    except ValueError:
+                        new_value = value_input # Keep as string for non-numeric values (like '0' or '1' for on/off)
+
+                    if selected_camera.set_camera_setting(setting_name, new_value):
+                        print(f"Successfully set {setting_name} to {new_value} for {selected_camera.camera_name}.")
+                    else:
+                        print(f"Failed to set {setting_name} for {selected_camera.camera_name}.")
+                    
                     self.setting_prompt_active = False # Reset flag after input
                 else:
-                    print("Unknown command. Please use 'q', 's', 'r', 'p', or 'c'.")
+                    print("Invalid command. Press 'q' to quit, 's' to save, 'r' to reset, 'p' to print stats, 'c' to change settings.")
                 
-                time.sleep(0.1) # Prevent busy-waiting too much
-                
+                if not self.setting_prompt_active: # Only sleep if not in the middle of a setting prompt
+                    time.sleep(0.1) # Small sleep to prevent busy-waiting
+        
         except KeyboardInterrupt:
-            print("\nInterrupted by user (Ctrl+C).")
-        
+            print("\nCtrl+C detected. Shutting down...")
         finally:
-            self.cleanup()
-    
-    def prompt_camera_settings(self):
-        """Prompt user for camera and settings to modify."""
-        print("\n--- Camera Settings ---")
-        if not self.cameras:
-            print("No active cameras to configure.")
-            return
+            self.stop_all_cameras()
 
-        print("Available Cameras:")
-        camera_map = {}
-        for i, (cam_id, camera_obj) in enumerate(self.cameras.items()):
-            print(f"  {i+1}. {camera_obj.camera_name} (ID: {cam_id}, Device: {camera_obj.real_device_path})")
-            camera_map[str(i+1)] = cam_id
-
-        while True:
-            choice = input("Enter camera number to configure (or 'b' to go back, 'l' to list controls): ").strip().lower()
-            if choice == 'b':
-                return
-            elif choice == 'l':
-                print("\nCommon ELP Camera Controls (based on your v4l2-ctl output):")
-                print("  auto_exposure: 1 (Manual Mode), 3 (Aperture Priority Mode)")
-                print("  exposure_time_absolute: [1-5000]")
-                print("  brightness: [-64-64]")
-                print("  contrast: [0-64]")
-                print("  saturation: [0-128]")
-                print("  hue: [-40-40]")
-                print("  gamma: [72-500]")
-                print("  gain: [0-100]")
-                print("  power_line_frequency: 0 (Disabled), 1 (50Hz), 2 (60Hz)")
-                print("  white_balance_automatic: 0 (off), 1 (on)")
-                print("  white_balance_temperature: [2800-6500] (inactive when auto is on)")
-                print("  sharpness: [0-6]")
-                print("  backlight_compensation: [0-2]")
-                print("  pan_absolute: [-36000, 36000] (if supported)")
-                print("  tilt_absolute: [-36000, 36000] (if supported)")
-                print("  zoom_absolute: [0-9] (if supported)")
-                continue
-            
-            if choice not in camera_map:
-                print("Invalid camera choice. Please try again.")
-                continue
-            
-            selected_cam_id = camera_map[choice]
-            selected_camera = self.cameras[selected_cam_id]
-            
-            while True:
-                setting_name = input(f"Enter setting name for {selected_camera.camera_name} (e.g., 'exposure_time_absolute', 'brightness', or 'b' to go back, 'g' to get current value): ").strip()
-                if setting_name == 'b':
-                    break
-                elif setting_name == 'g':
-                    setting_to_get = input("Enter setting name to get its current value: ").strip()
-                    if setting_to_get:
-                        current_value = selected_camera.get_camera_setting(setting_to_get)
-                        if current_value is not None:
-                            print(f"Current value of {setting_to_get} for {selected_camera.camera_name}: {current_value}")
-                    continue
-
-                if not setting_name:
-                    print("Setting name cannot be empty.")
-                    continue
-                
-                value_str = input(f"Enter value for {setting_name} (e.g., 100, 2047): ").strip()
-                if not value_str.isdigit() and not (value_str.startswith('-') and value_str[1:].isdigit()): # Allow negative for brightness
-                    print("Value must be an integer. Please try again.")
-                    continue
-                
-                value = int(value_str)
-                selected_camera.set_camera_setting(setting_name, value)
-                
-                another = input("Set another setting for this camera? (y/N): ").strip().lower()
-                if another != 'y':
-                    break
-            
-            another_camera = input("Configure another camera? (y/N): ").strip().lower()
-            if another_camera != 'y':
-                break
-
-    def save_current_frames(self):
-        """Save current frame from all cameras"""
-        timestamp = time.time()
-        saved_files = []
-        
-        for cam_id, camera in self.cameras.items():
-            frame_info = camera.get_latest_frame() # Get latest frame for saving
-            if frame_info:
-                filepath = camera.save_frame(frame_info['frame'], timestamp)
-                if filepath:
-                    saved_files.append(filepath)
-        
-        print(f"Saved {len(saved_files)} frames at {datetime.fromtimestamp(timestamp)}")
-    
-    def reset_counters(self):
-        """Reset frame counters for all cameras"""
-        for camera in self.cameras.values():
-            camera.frame_count = 0
-            camera.dropped_frames = 0
-            camera.fps_counter.clear()
-            # Clear frame queue to ensure fresh start
-            while not camera.frame_queue.empty():
-                try:
-                    camera.frame_queue.get_nowait()
-                except queue.Empty:
-                    break
-        print("Frame counters reset")
-    
-    def print_stats(self):
-        """Print current statistics"""
-        print(f"\n--- Stats at {datetime.now().strftime('%H:%M:%S')} ---")
-        for cam_id, camera in self.cameras.items():
-            fps = camera.get_fps()
-            print(f"{camera.camera_name}: {fps:.1f} FPS, "
-                  f"{camera.frame_count} frames, "
-                  f"{camera.dropped_frames} dropped, "
-                  f"Queue: {camera.frame_queue.qsize()}/{camera.frame_queue.maxsize}")
-    
-    def cleanup(self):
-        """Clean up resources"""
-        print("\nCleaning up...")
-        self.running = False
-        
-        # Stop all camera capture threads
-        for camera in self.cameras.values():
-            camera.stop()
-        
-        # Wait for adjustment thread to finish
-        if self.adjustment_thread and self.adjustment_thread.is_alive():
-            print("Stopping adjustment thread...")
+    def stop_all_cameras(self):
+        """Stops all running camera threads and releases resources."""
+        print("Stopping all cameras...")
+        self.running = False # Signal adjustment thread to stop
+        if self.adjustment_thread:
             self.adjustment_thread.join(timeout=2.0)
             if self.adjustment_thread.is_alive():
                 print("Warning: Adjustment thread did not terminate cleanly.")
-
-        # Close all OpenCV display windows (if any were created, though with web UI this is less critical)
-        cv2.destroyAllWindows()
-        print("Cleanup complete")
+        
+        for cam_id, camera in self.cameras.items():
+            camera.stop()
+        print("All cameras stopped and resources released.")
 
 def main():
-    parser = argparse.ArgumentParser(description='Multi-camera inspector for ELP USB cameras on Jetson Nano with Web UI and Auto Adjustment')
-    parser.add_argument('--cameras', nargs='+', type=str, 
-                        # Updated choices: allow generic videoX to be specified
-                        choices=['camera_lr', 'camera_ur', 'camera_ul', 'camera_ll'] + [f'video{i}' for i in range(10)], 
-                        help='Specific cameras to use (e.g., --cameras camera_lr camera_ur video0). If not specified, all detected cameras will be used.')
-    parser.add_argument('--save-path', type=str, default=None,
-                        help='Path to save frames (e.g., /media/sdcard/images)')
-    parser.add_argument('--resolution', type=str, default='1280x720', # Default to a safer resolution
-                        help='Maximum resolution for cameras (e.g., 1920x1080, 1280x720). Default: 1280x720.')
-    parser.add_argument('--detect-only', action='store_true',
-                        help='Only detect cameras and exit.')
+    parser = argparse.ArgumentParser(description="Multi-Camera Inspector for Jetson Nano with Flask web interface.")
+    parser.add_argument('--cameras', nargs='+', help="Specific camera IDs/names to use (e.g., camera_lr video0). If omitted, all detected cameras will be used.")
+    parser.add_argument('--save_path', type=str, default=os.path.join(os.getcwd(), 'captured_frames'),
+                        help="Path to save captured frames. Defaults to a 'captured_frames' directory in the current working directory.")
+    parser.add_argument('--width', type=int, default=1920, help="Set the width resolution for cameras.")
+    parser.add_argument('--height', type=int, default=1080, help="Set the height resolution for cameras.")
     
     args = parser.parse_args()
-    
-    if args.detect_only:
-        # Added a check here for detect_cameras to print more info for the user
-        detected_cams = detect_cameras()
-        if detected_cams:
-            print("\n--- Detected Cameras ---")
-            for cam_id, info in detected_cams.items():
-                print(f"  ID: {cam_id}, Name: {info['name']}, Path: {info['path']}, Real Device: {info['real_device']}")
-        else:
-            print("No cameras detected by the script's detection logic.")
-        return
-    
-    # Parse resolution
-    try:
-        width, height = map(int, args.resolution.split('x'))
-    except ValueError:
-        print("Error: Invalid resolution format. Please use WIDTHxHEIGHT, e.g., 1280x720.")
-        sys.exit(1)
-    
+
+    max_resolution = (args.width, args.height)
+
     inspector = MultiCameraInspector(
         camera_selection=args.cameras,
         save_path=args.save_path,
-        max_resolution=(width, height)
+        max_resolution=max_resolution
     )
     
     inspector.run_inspection()
 
 if __name__ == "__main__":
+    # HTML template for Flask. This should be saved as 'templates/index.html'
+    # relative to where your script is run.
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Multi-Camera Inspector</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .camera-container {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 20px;
+                justify-content: center;
+            }
+            .camera-card {
+                border: 1px solid #ccc;
+                padding: 10px;
+                box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
+                border-radius: 8px;
+                background-color: #f9f9f9;
+                text-align: center;
+            }
+            .camera-card h2 {
+                margin-top: 0;
+                color: #333;
+            }
+            .camera-card img {
+                max-width: 100%;
+                height: auto;
+                border: 1px solid #eee;
+                border-radius: 4px;
+                margin-top: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Multi-Camera Inspector</h1>
+        <div class="camera-container">
+            {% for cam_id, camera in cameras.items() %}
+            <div class="camera-card">
+                <h2>{{ camera.camera_name }} ({{ cam_id }})</h2>
+                <img src="{{ url_for('video_feed', camera_id=cam_id) }}" width="640" height="480" alt="Video Feed">
+                <p>Status: Live</p>
+                </div>
+            {% endfor %}
+        </div>
+        {% if not cameras %}
+        <p>No cameras are currently active or detected.</p>
+        {% endif %}
+    </body>
+    </html>
+    """
+
+    # Create the 'templates' directory if it doesn't exist
+    template_dir = 'templates'
+    os.makedirs(template_dir, exist_ok=True)
+
+    # Write the HTML template to a file inside the 'templates' directory
+    with open(os.path.join(template_dir, 'index.html'), 'w') as f:
+        f.write(html_template)
+    
     main()
