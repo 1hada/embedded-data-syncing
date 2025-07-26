@@ -11,7 +11,6 @@ Resolution & Frame Rate
 1280 x 720 MJPEG@30fps YUY2@10fps   1024 x 768MJPEG@30fps YUY2@10fps
 800 x 600 MJPEG@30fps YUY2@15fps     640 x 480MJPEG@30fps YUY2@30fps
 """
-
 import cv2
 import numpy as np
 import threading
@@ -38,15 +37,24 @@ ADJUSTMENT_STEP_CONTRAST = 10 # How much to change contrast by
 ADJUSTMENT_STEP_GAIN = 5 # How much to change gain by
 
 # Define common camera setting ranges (these are typical, might need fine-tuning for your specific camera)
-# Use 'v4l2-ctl -d /dev/videoX -L' to get actual ranges for your device
+# !!! UPDATED BASED ON v4l2-ctl -d /dev/video2 -L OUTPUT !!!
 SETTING_RANGES = {
-    'exposure_auto': {'manual': 3, 'aperture_priority': 1, 'auto_mode': 1, 'manual_mode': 3}, # ELP cameras often use 1 (auto) or 3 (manual)
-    'exposure_absolute': {'min': 10, 'max': 2047}, # Typical range, verify with v4l2-ctl
-    'brightness': {'min': 0, 'max': 255},
-    'contrast': {'min': 0, 'max': 255},
-    'gain': {'min': 0, 'max': 255},
-    'white_balance_temperature_auto': {'off': 0, 'on': 1},
-    'white_balance_temperature': {'min': 2800, 'max': 6500}, # Typical range, verify with v4l2-ctl
+    'auto_exposure': {'manual': 1, 'aperture_priority': 3}, # Your camera uses 1 for Manual, 3 for Aperture Priority
+    'exposure_time_absolute': {'min': 1, 'max': 5000}, # Correct name and range
+    'brightness': {'min': -64, 'max': 64}, # Correct range
+    'contrast': {'min': 0, 'max': 64}, # Correct range
+    'saturation': {'min': 0, 'max': 128},
+    'hue': {'min': -40, 'max': 40},
+    'gamma': {'min': 72, 'max': 500},
+    'gain': {'min': 0, 'max': 100}, # Correct range
+    'power_line_frequency': {'disabled': 0, '50hz': 1, '60hz': 2},
+    'white_balance_automatic': {'off': 0, 'on': 1}, # Correct name and boolean values
+    'white_balance_temperature': {'min': 2800, 'max': 6500}, # This is inactive when auto is on
+    'sharpness': {'min': 0, 'max': 6},
+    'backlight_compensation': {'min': 0, 'max': 2},
+    'pan_absolute': {'min': -36000, 'max': 36000}, # If your camera supports it
+    'tilt_absolute': {'min': -36000, 'max': 36000}, # If your camera supports it
+    'zoom_absolute': {'min': 0, 'max': 9}, # If your camera supports it
 }
 
 
@@ -136,17 +144,17 @@ class CameraInspector:
         # This is often more reliable and persistent for ELP cameras than OpenCV properties.
         if self.real_device_path and os.path.exists(self.real_device_path):
             try:
-                # Set to manual exposure (typically 3 for ELP cameras)
-                if self.set_camera_setting('exposure_auto', SETTING_RANGES['exposure_auto']['manual']):
+                # !!! UPDATED: Control name is 'auto_exposure', and 'manual' mode is 1 !!!
+                if self.set_camera_setting('auto_exposure', SETTING_RANGES['auto_exposure']['manual']):
                     print(f"{self.camera_name}: Auto-exposure disabled (set to manual).")
                 else:
-                    print(f"{self.camera_name}: Could not set exposure_auto to manual via v4l2-ctl.")
+                    print(f"{self.camera_name}: Could not set auto_exposure to manual via v4l2-ctl.")
 
-                # Set to manual white balance (typically 0 for off)
-                if self.set_camera_setting('white_balance_temperature_auto', SETTING_RANGES['white_balance_temperature_auto']['off']):
+                # !!! UPDATED: Control name is 'white_balance_automatic' !!!
+                if self.set_camera_setting('white_balance_automatic', SETTING_RANGES['white_balance_automatic']['off']):
                     print(f"{self.camera_name}: Auto-white balance disabled.")
                 else:
-                    print(f"{self.camera_name}: Could not set white_balance_temperature_auto to off via v4l2-ctl.")
+                    print(f"{self.camera_name}: Could not set white_balance_automatic to off via v4l2-ctl.")
                 time.sleep(0.1) # Give camera time to apply settings
             except Exception as e:
                 print(f"Error attempting initial v4l2-ctl settings for {self.camera_name}: {e}")
@@ -162,36 +170,34 @@ class CameraInspector:
         
         return True
     
-    # set_camera_setting, get_camera_setting, calculate_brightness_level, adjust_image_settings
-    # ... (These methods remain largely the same as in the previous, comprehensive update) ...
     def set_camera_setting(self, setting_name, value):
         """
         Set a camera property using v4l2-ctl.
         Requires the actual /dev/videoX path.
-        Example setting_name: 'exposure_auto', 'exposure_absolute', 'brightness', 'contrast', 'gain', 'white_balance_temperature_auto', 'white_balance_temperature'
+        Example setting_name: 'auto_exposure', 'exposure_time_absolute', 'brightness', etc.
         """
         if not self.real_device_path or not os.path.exists(self.real_device_path):
-            # print(f"Error: Cannot set {setting_name}. Real device path '{self.real_device_path}' not valid for {self.camera_name}.")
             return False
 
         try:
             # Handle specific control interactions for manual/auto modes
-            if setting_name == 'exposure_absolute':
-                # Ensure auto exposure is set to manual mode (3 for ELP)
-                if self.get_camera_setting('exposure_auto') != SETTING_RANGES['exposure_auto']['manual']:
-                    self.set_camera_setting('exposure_auto', SETTING_RANGES['exposure_auto']['manual'])
+            # !!! UPDATED: Control name is 'exposure_time_absolute' and 'auto_exposure' !!!
+            if setting_name == 'exposure_time_absolute':
+                # Ensure auto exposure is set to manual mode (1 for your ELP)
+                if self.get_camera_setting('auto_exposure') != SETTING_RANGES['auto_exposure']['manual']:
+                    self.set_camera_setting('auto_exposure', SETTING_RANGES['auto_exposure']['manual'])
                     time.sleep(0.05) # Give it a moment to switch modes
+            # !!! UPDATED: Control name is 'white_balance_temperature' and 'white_balance_automatic' !!!
             elif setting_name == 'white_balance_temperature':
                 # Ensure auto WB is off
-                if self.get_camera_setting('white_balance_temperature_auto') != SETTING_RANGES['white_balance_temperature_auto']['off']:
-                    self.set_camera_setting('white_balance_temperature_auto', SETTING_RANGES['white_balance_temperature_auto']['off'])
+                if self.get_camera_setting('white_balance_automatic') != SETTING_RANGES['white_balance_automatic']['off']:
+                    self.set_camera_setting('white_balance_automatic', SETTING_RANGES['white_balance_automatic']['off'])
                     time.sleep(0.05) # Give it a moment
 
             command = ["v4l2-ctl", "-d", self.real_device_path, f"--set-ctrl={setting_name}={value}"]
             result = subprocess.run(command, capture_output=True, text=True)
 
             if result.returncode == 0:
-                # print(f"Successfully set {setting_name} to {value} for {self.camera_name}.")
                 return True
             else:
                 print(f"Failed to set {setting_name} to {value} for {self.camera_name}. Error: {result.stderr.strip()}")
@@ -211,7 +217,6 @@ class CameraInspector:
         Requires the actual /dev/videoX path.
         """
         if not self.real_device_path or not os.path.exists(self.real_device_path):
-            # print(f"Error: Cannot get {setting_name}. Real device path '{self.real_device_path}' not valid for {self.camera_name}.")
             return None
 
         try:
@@ -225,13 +230,10 @@ class CameraInspector:
                     try:
                         return int(value_str)
                     except ValueError:
-                        # print(f"Could not parse integer value for {setting_name}: {value_str}")
                         return value_str # Return as string if not an int
                 else:
-                    # print(f"Unexpected output format for {setting_name}: {output_line}")
                     return None
             else:
-                # print(f"Failed to get {setting_name} for {self.camera_name}. Error: {result.stderr.strip()}")
                 return None
         except FileNotFoundError:
             print("Error: v4l2-ctl not found. Please ensure it is installed (sudo apt install v4l-utils).")
@@ -255,11 +257,8 @@ class CameraInspector:
                     self.frame_queue.put_nowait((frame, current_time))
                 except queue.Full:
                     self.dropped_frames += 1
-                    # print(f"[{self.camera_name}] Frame queue full, dropped frame. Queue size: {self.frame_queue.qsize()}") # Uncomment for debug
                     
             else:
-                # print(f"[{self.camera_name}] Failed to read frame (might be select() timeout). Retrying...")
-                # Add a small delay if read fails to prevent rapid, continuous failures from overwhelming.
                 time.sleep(0.01)
     
     def get_fps(self):
@@ -296,7 +295,7 @@ class CameraInspector:
             try:
                 frame, timestamp = self.frame_queue.get_nowait()
             except queue.Empty:
-                break # Should not happen with while not empty, but for safety
+                break
         if frame is not None:
             return {'frame': frame, 'timestamp': timestamp}
         return None
@@ -401,7 +400,6 @@ def detect_cameras():
         product_id = None
         try:
             # Use udevadm to get attributes.
-            # This is a bit heavy, but it's the best way to verify if it's an ELP.
             udevadm_output = subprocess.check_output(['udevadm', 'info', '--name', device, '--attribute-walk'], text=True)
             for line in udevadm_output.splitlines():
                 if 'ATTRS{idVendor}' in line:
@@ -411,8 +409,7 @@ def detect_cameras():
                 if vendor_id and product_id:
                     break
 
-            # Your ELP camera vendor/product ID. **UPDATE THESE IF DIFFERENT**
-            # Based on your udev rules, it's 32e4:0298
+            # Your ELP camera vendor/product ID. This should be '32e4:0298' based on your previous logs.
             if vendor_id == "32e4" and product_id == "0298": 
                 # This appears to be an ELP camera, and it's not mapped by symlink
                 device_num = int(device.split('video')[1])
@@ -423,14 +420,9 @@ def detect_cameras():
                     'name': generic_name,
                     'real_device': device
                 }
-            # else:
-            #     print(f"Found non-ELP video device: {device} (Vendor: {vendor_id}, Product: {product_id}). Skipping.")
-
         except subprocess.CalledProcessError:
-            # print(f"Could not get udevadm info for {device}. Skipping.")
-            pass # Silently skip if udevadm fails for this device
+            pass 
         except Exception as e:
-            # print(f"Error checking {device} with udevadm: {e}. Skipping.")
             pass
 
     if not cameras:
@@ -457,42 +449,41 @@ def adjust_image_settings(camera: CameraInspector, current_brightness: float):
     real_device = camera.real_device_path
 
     if not real_device or not os.path.exists(real_device):
-        # print(f"Cannot adjust settings for {cam_name}: Real device path unknown or invalid.")
         return
 
-    # print(f"[{cam_name}] Current Brightness: {current_brightness:.2f}")
-
-    # Prioritize exposure
-    current_exposure_auto = camera.get_camera_setting('exposure_auto')
+    # !!! UPDATED: Control name is 'auto_exposure' !!!
+    current_auto_exposure = camera.get_camera_setting('auto_exposure')
     
     # Ensure camera is in manual exposure mode for adjustments
-    if current_exposure_auto != SETTING_RANGES['exposure_auto']['manual']:
-        camera.set_camera_setting('exposure_auto', SETTING_RANGES['exposure_auto']['manual'])
+    # !!! UPDATED: Manual mode value is 1 for your camera !!!
+    if current_auto_exposure != SETTING_RANGES['auto_exposure']['manual']:
+        camera.set_camera_setting('auto_exposure', SETTING_RANGES['auto_exposure']['manual'])
         time.sleep(0.05) # Give camera time to apply change
     
-    current_exposure = camera.get_camera_setting('exposure_absolute')
-    exposure_min = SETTING_RANGES.get('exposure_absolute', {}).get('min', 10)
-    exposure_max = SETTING_RANGES.get('exposure_absolute', {}).get('max', 2047)
+    # !!! UPDATED: Control name is 'exposure_time_absolute' !!!
+    current_exposure = camera.get_camera_setting('exposure_time_absolute')
+    exposure_min = SETTING_RANGES.get('exposure_time_absolute', {}).get('min', 1) # Default to 1
+    exposure_max = SETTING_RANGES.get('exposure_time_absolute', {}).get('max', 5000) # Default to 5000
 
     if current_exposure is not None:
         if current_brightness < BRIGHTNESS_TARGET_LOW:
             if current_exposure < exposure_max:
                 new_exposure = min(current_exposure + ADJUSTMENT_STEP_EXPOSURE, exposure_max)
-                print(f"[{cam_name}] Image too dark ({current_brightness:.2f}). Increasing exposure from {current_exposure} to {new_exposure}.")
-                camera.set_camera_setting('exposure_absolute', new_exposure)
+                print(f"[{cam_name}] Image too dark ({current_brightness:.2f}). Increasing exposure_time_absolute from {current_exposure} to {new_exposure}.")
+                camera.set_camera_setting('exposure_time_absolute', new_exposure)
                 return # Only adjust one major setting at a time
 
         elif current_brightness > BRIGHTNESS_TARGET_HIGH:
             if current_exposure > exposure_min:
                 new_exposure = max(current_exposure - ADJUSTMENT_STEP_EXPOSURE, exposure_min)
-                print(f"[{cam_name}] Image too bright ({current_brightness:.2f}). Decreasing exposure from {current_exposure} to {new_exposure}.")
-                camera.set_camera_setting('exposure_absolute', new_exposure)
+                print(f"[{cam_name}] Image too bright ({current_brightness:.2f}). Decreasing exposure_time_absolute from {current_exposure} to {new_exposure}.")
+                camera.set_camera_setting('exposure_time_absolute', new_exposure)
                 return # Only adjust one major setting at a time
 
     # If exposure is at limits or not adjustable, try brightness
     current_brightness_val = camera.get_camera_setting('brightness')
-    brightness_min = SETTING_RANGES.get('brightness', {}).get('min', 0)
-    brightness_max = SETTING_RANGES.get('brightness', {}).get('max', 255)
+    brightness_min = SETTING_RANGES.get('brightness', {}).get('min', -64) # Updated range
+    brightness_max = SETTING_RANGES.get('brightness', {}).get('max', 64) # Updated range
 
     if current_brightness_val is not None:
         if current_brightness < BRIGHTNESS_TARGET_LOW:
@@ -511,8 +502,8 @@ def adjust_image_settings(camera: CameraInspector, current_brightness: float):
 
     # Then contrast
     current_contrast = camera.get_camera_setting('contrast')
-    contrast_min = SETTING_RANGES.get('contrast', {}).get('min', 0)
-    contrast_max = SETTING_RANGES.get('contrast', {}).get('max', 255)
+    contrast_min = SETTING_RANGES.get('contrast', {}).get('min', 0) # Updated range
+    contrast_max = SETTING_RANGES.get('contrast', {}).get('max', 64) # Updated range
 
     if current_contrast is not None:
         if current_brightness < BRIGHTNESS_TARGET_LOW:
@@ -530,8 +521,8 @@ def adjust_image_settings(camera: CameraInspector, current_brightness: float):
             
     # Finally, gain
     current_gain = camera.get_camera_setting('gain')
-    gain_min = SETTING_RANGES.get('gain', {}).get('min', 0)
-    gain_max = SETTING_RANGES.get('gain', {}).get('max', 255)
+    gain_min = SETTING_RANGES.get('gain', {}).get('min', 0) # Updated range
+    gain_max = SETTING_RANGES.get('gain', {}).get('max', 100) # Updated range
 
     if current_gain is not None:
         if current_brightness < BRIGHTNESS_TARGET_LOW:
@@ -720,21 +711,23 @@ class MultiCameraInspector:
             if choice == 'b':
                 return
             elif choice == 'l':
-                print("\nCommon ELP Camera Controls (use 'v4l2-ctl -d /dev/videoX -L' for full list and ranges):")
-                print("  exposure_auto: 0 (Manual), 1 (Aperture Priority), 3 (Shutter Priority)")
-                print("  exposure_absolute: [1-2047] (manual exposure time, depends on camera)")
-                print("  brightness: [0-255]")
-                print("  contrast: [0-255]")
-                print("  saturation: [0-255]")
-                print("  gain: [0-255]")
-                print("  white_balance_temperature_auto: 0 (off), 1 (on)")
-                print("  white_balance_temperature: [2800-6500] (manual temperature, depends on camera)")
+                print("\nCommon ELP Camera Controls (based on your v4l2-ctl output):")
+                print("  auto_exposure: 1 (Manual Mode), 3 (Aperture Priority Mode)")
+                print("  exposure_time_absolute: [1-5000]")
+                print("  brightness: [-64-64]")
+                print("  contrast: [0-64]")
+                print("  saturation: [0-128]")
+                print("  hue: [-40-40]")
+                print("  gamma: [72-500]")
+                print("  gain: [0-100]")
                 print("  power_line_frequency: 0 (Disabled), 1 (50Hz), 2 (60Hz)")
-                print("  sharpness: [0-255]")
-                print("  backlight_compensation: [0-1]")
+                print("  white_balance_automatic: 0 (off), 1 (on)")
+                print("  white_balance_temperature: [2800-6500] (inactive when auto is on)")
+                print("  sharpness: [0-6]")
+                print("  backlight_compensation: [0-2]")
                 print("  pan_absolute: [-36000, 36000] (if supported)")
                 print("  tilt_absolute: [-36000, 36000] (if supported)")
-                print("  zoom_absolute: [0-500] (if supported)")
+                print("  zoom_absolute: [0-9] (if supported)")
                 continue
             
             if choice not in camera_map:
@@ -745,7 +738,7 @@ class MultiCameraInspector:
             selected_camera = self.cameras[selected_cam_id]
             
             while True:
-                setting_name = input(f"Enter setting name for {selected_camera.camera_name} (e.g., 'exposure_absolute', 'brightness', or 'b' to go back, 'g' to get current value): ").strip()
+                setting_name = input(f"Enter setting name for {selected_camera.camera_name} (e.g., 'exposure_time_absolute', 'brightness', or 'b' to go back, 'g' to get current value): ").strip()
                 if setting_name == 'b':
                     break
                 elif setting_name == 'g':
@@ -761,7 +754,7 @@ class MultiCameraInspector:
                     continue
                 
                 value_str = input(f"Enter value for {setting_name} (e.g., 100, 2047): ").strip()
-                if not value_str.isdigit():
+                if not value_str.isdigit() and not (value_str.startswith('-') and value_str[1:].isdigit()): # Allow negative for brightness
                     print("Value must be an integer. Please try again.")
                     continue
                 
