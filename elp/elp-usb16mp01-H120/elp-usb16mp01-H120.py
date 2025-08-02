@@ -16,7 +16,7 @@ import numpy as np
 import threading
 import time
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import queue
 import argparse
 from collections import deque
@@ -26,11 +26,10 @@ import sys
 import json # For metadata JSON files
 import shutil # For disk usage
 import atexit # For graceful shutdown
-from datetime import datetime, timedelta, timezone
-
+from functools import wraps
 
 # Flask imports for web server
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, request, redirect, url_for, session, send_file, jsonify
 
 # --- Configuration Constants ---
 ADJUSTMENT_INTERVAL = 1.0  # Seconds between image adjustments
@@ -44,10 +43,14 @@ ADJUSTMENT_STEP_GAIN = 10 # Base amount to change gain by
 BRIGHTNESS_DEVIATION_SCALE = 0.5 # Adjust this value: higher means more aggressive scaling
 
 # --- Video Recording Constants ---
-VIDEO_SAVE_PATH = './video_streams' # <<< IMPORTANT: Ensure this directory exists and is writable
+VIDEO_SAVE_PATH = '~/video_streams' 
 CLIP_DURATION_MINUTES = 1 # Duration of each video clip before a new one is started
 DIRECTORY_THRESHOLD_GB = 50 # GB of disk usage at which old files are deleted
 DISK_CHECK_INTERVAL_SECONDS = 60 # How often to check disk space
+
+# --- Authentication Constants ---
+# Set WEB_PASSWORD environment variable to protect access
+WEB_PASSWORD = os.environ.get('WEB_PASSWORD', None)
 
 # Define common camera setting ranges
 SETTING_RANGES = {
@@ -557,6 +560,272 @@ def adjust_image_settings(camera: CameraInspector, current_brightness: float):
         # print(f"[{cam_name}] Brightness within target range or no further adjustment possible.")
 
 
+class VideoPlayback:
+    """Handles video file playback for the web interface"""
+    def __init__(self, save_path):
+        self.save_path = save_path
+        self.current_video = None
+        self.video_cap = None
+        self.playback_thread = None
+        self.playing = False
+        self.frame_queue = queue.Queue(maxsize=60)
+        self.playback_fps = 30.0
+        self.total_frames = 0
+        self.current_frame_num = 0
+        self.loop_video = True  # Add option to loop videos
+        
+    def get_video_files(self):
+        """Get all available video files organized by camera"""
+        videos = {}
+        if not os.path.exists(self.save_path):
+            return videos
+            
+        for camera_dir in os.listdir(self.save_path):
+            camera_path = os.path.join(self.save_path, camera_dir)
+            if os.path.isdir(camera_path):
+                video_files = []
+                for video_file in sorted(glob.glob(os.path.join(camera_path, "*.avi"))):
+                    # Get metadata if available
+                    metadata_file = video_file.replace('.avi', '.json')
+                    metadata = {}
+                    if os.path.exists(metadata_file):
+                        try:
+                            with open(metadata_file, 'r') as f:
+                                metadata = json.load(f)
+                        except:
+                            pass
+                    
+                    # Extract timestamp from filename for sorting
+                    filename = os.path.basename(video_file)
+                    try:
+                        # Parse timestamp from filename pattern: camera_YYYYMMDD_HHMMSS_mmm.avi
+                        parts = filename.replace('.avi', '').split('_')
+                        if len(parts) >= 3:
+                            date_str = parts[-2]
+                            time_str = parts[-1][:6]  # Take first 6 chars for HHMMSS
+                            timestamp = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                        else:
+                            timestamp = datetime.fromtimestamp(os.path.getmtime(video_file))
+                    except:
+                        timestamp = datetime.fromtimestamp(os.path.getmtime(video_file))
+                    
+                    video_info = {
+                        'path': video_file,
+                        'filename': filename,
+                        'timestamp': timestamp,
+                        'size_mb': round(os.path.getsize(video_file) / (1024*1024), 2),
+                        'metadata': metadata
+                    }
+                    video_files.append(video_info)
+                
+                if video_files:
+                    # Sort by timestamp, newest first
+                    video_files.sort(key=lambda x: x['timestamp'], reverse=True)
+                    videos[camera_dir] = video_files
+                    
+        return videos
+    
+    def load_video(self, video_path):
+        """Load a video file for playback"""
+        try:
+            # Stop current playback if running
+            if self.playing:
+                self.stop_playback()
+            
+            if self.video_cap:
+                self.video_cap.release()
+            
+            self.video_cap = cv2.VideoCapture(video_path)
+            if not self.video_cap.isOpened():
+                print(f"Failed to open video file: {video_path}")
+                return False
+            
+            self.current_video = video_path
+            self.total_frames = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.playback_fps = self.video_cap.get(cv2.CAP_PROP_FPS) or 30.0
+            self.current_frame_num = 0
+            
+            # Clear any existing frames in queue
+            while not self.frame_queue.empty():
+                try:
+                    self.frame_queue.get_nowait()
+                except queue.Empty:
+                    break
+            
+            print(f"Loaded video: {os.path.basename(video_path)} ({self.total_frames} frames, {self.playback_fps} FPS)")
+            return True
+            
+        except Exception as e:
+            print(f"Error loading video {video_path}: {e}")
+            return False
+    
+    def start_playback(self):
+        """Start video playback"""
+        if not self.video_cap or not self.video_cap.isOpened():
+            print("No video loaded or video file could not be opened")
+            return False
+        
+        if self.playing:
+            print("Playback already running")
+            return True
+        
+        self.playing = True
+        self.playback_thread = threading.Thread(target=self._playback_loop)
+        self.playback_thread.daemon = True
+        self.playback_thread.start()
+        print("Video playback started")
+        return True
+    
+    def stop_playback(self):
+        """Stop video playback"""
+        if not self.playing:
+            return
+            
+        print("Stopping video playback")
+        self.playing = False
+        if self.playback_thread and self.playback_thread.is_alive():
+            self.playback_thread.join(timeout=2.0)
+        
+        # Clear the frame queue
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                break
+    
+    def _playback_loop(self):
+        """Internal playback loop"""
+        if not self.video_cap or not self.video_cap.isOpened():
+            print("Video capture not available in playback loop")
+            self.playing = False
+            return
+            
+        frame_delay = 1.0 / max(self.playback_fps, 1.0)  # Prevent division by zero
+        
+        print(f"Starting playback loop with FPS: {self.playback_fps}, frame delay: {frame_delay}")
+        
+        while self.playing and self.video_cap and self.video_cap.isOpened():
+            ret, frame = self.video_cap.read()
+            
+            if not ret:
+                if self.loop_video and self.total_frames > 0:
+                    # End of video, loop back to beginning
+                    print("End of video reached, looping back to start")
+                    self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    self.current_frame_num = 0
+                    continue
+                else:
+                    # End of video, stop playback
+                    print("End of video reached, stopping playback")
+                    self.playing = False
+                    break
+            
+            if frame is None:
+                print("Warning: Got None frame from video")
+                continue
+                
+            self.current_frame_num = int(self.video_cap.get(cv2.CAP_PROP_POS_FRAMES))
+            
+            try:
+                # Non-blocking put - if queue is full, skip this frame
+                self.frame_queue.put_nowait(frame)
+            except queue.Full:
+                # Skip frame if queue is full to prevent blocking
+                pass
+            
+            time.sleep(frame_delay)
+        
+        print("Playback loop ended")
+    
+    def generate_mjpeg_frames(self):
+        """Generate MJPEG frames for web streaming"""
+        last_frame = None
+        placeholder_frame = None
+        
+        while True:  # Always generate frames for the web stream
+            try:
+                if self.playing:
+                    # Try to get a frame from the queue
+                    frame = None
+                    try:
+                        # Only get one frame at a time to avoid draining the queue too fast
+                        frame = self.frame_queue.get(timeout=0.05)  # 50ms timeout
+                        last_frame = frame  # Store the last valid frame
+                    except queue.Empty:
+                        # No new frame available, use the last frame if we have one
+                        frame = last_frame
+                    
+                    if frame is not None:
+                        ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                        if ret:
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                            continue
+                
+                # No video playing or no frames available - show placeholder
+                if placeholder_frame is None:
+                    placeholder_frame = self._create_placeholder_frame()
+                
+                ret, jpeg = cv2.imencode('.jpg', placeholder_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                if ret:
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                
+                time.sleep(0.033)  # ~30fps for placeholder
+                
+            except Exception as e:
+                print(f"Error in MJPEG frame generation: {e}")
+                time.sleep(0.1)
+    
+    def _create_placeholder_frame(self):
+        """Create a placeholder frame when no video is playing"""
+        # Create a dark frame with text
+        height, width = 480, 640
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        frame.fill(30)  # Dark gray background
+        
+        # Add text
+        if self.current_video and not self.playing:
+            text = f"Video Loaded: {os.path.basename(self.current_video)}"
+            subtext = "Click 'Play' to start playback"
+        else:
+            text = "No Video Selected"
+            subtext = "Select a video from the list to begin playback"
+        
+        # Main text
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        thickness = 2
+        color = (255, 255, 255)
+        
+        # Get text size and center it
+        (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, thickness)
+        text_x = (width - text_width) // 2
+        text_y = (height - text_height) // 2
+        
+        cv2.putText(frame, text, (text_x, text_y), font, font_scale, color, thickness)
+        
+        # Subtext
+        font_scale_sub = 0.5
+        thickness_sub = 1
+        (subtext_width, subtext_height), _ = cv2.getTextSize(subtext, font, font_scale_sub, thickness_sub)
+        subtext_x = (width - subtext_width) // 2
+        subtext_y = text_y + text_height + 30
+        
+        cv2.putText(frame, subtext, (subtext_x, subtext_y), font, font_scale_sub, (200, 200, 200), thickness_sub)
+        
+        return frame
+    
+    def get_playback_info(self):
+        """Get current playback information"""
+        return {
+            'current_video': os.path.basename(self.current_video) if self.current_video else None,
+            'playing': self.playing,
+            'current_frame': self.current_frame_num,
+            'total_frames': self.total_frames,
+            'fps': self.playback_fps,
+            'progress_percent': (self.current_frame_num / self.total_frames * 100) if self.total_frames > 0 else 0
+        }
 
 class VideoRecorder:
     def __init__(self, save_path, clip_duration_minutes, directory_threshold_gb, disk_check_interval_seconds, resolution, camera_inspectors_map):
@@ -978,8 +1247,6 @@ class VideoRecorder:
         print("Video recorder stopped.")
 
 
-
-
 class MultiCameraInspector:
     def __init__(self, camera_selection=None, max_resolution=(1920, 1080)):
         self.camera_selection = camera_selection
@@ -989,6 +1256,7 @@ class MultiCameraInspector:
         self.setting_prompt_active = False
         self.adjustment_thread = None
         self.video_recorder = None 
+        self.video_playback = None
         # Register graceful exit handler
         atexit.register(self.stop_all_cameras)
 
@@ -1050,6 +1318,9 @@ class MultiCameraInspector:
         # Link the recorder back to each camera (recorder will handle starting its own writer threads)
         for cam_id, camera_obj in self.cameras.items():
             camera_obj.recorder = self.video_recorder
+        
+        # Initialize video playback
+        self.video_playback = VideoPlayback(VIDEO_SAVE_PATH)
             
         return len(self.cameras) > 0
     
@@ -1092,20 +1363,126 @@ class MultiCameraInspector:
         print("  'p' - Print current stats")
         print("  'c' - Change camera settings (exposure, gain, etc.)")
         print("  Access camera feeds at http://<your_jetson_ip>:5000")
+        if WEB_PASSWORD:
+            print("  Password protection enabled via WEB_PASSWORD environment variable")
+        else:
+            print("  WARNING: No password protection! Set WEB_PASSWORD environment variable to secure access")
 
         app = Flask(__name__, template_folder='templates')
+        app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key-change-this')
+
+        # Authentication decorator
+        def login_required(f):
+            @wraps(f)
+            def decorated_function(*args, **kwargs):
+                if WEB_PASSWORD is None:
+                    return f(*args, **kwargs)  # No password required if not set
+                if 'authenticated' not in session or not session['authenticated']:
+                    return redirect(url_for('login'))
+                return f(*args, **kwargs)
+            return decorated_function
+
+        @app.route('/login', methods=['GET', 'POST'])
+        def login():
+            if WEB_PASSWORD is None:
+                return redirect(url_for('index'))  # Skip login if no password set
+            
+            if request.method == 'POST':
+                password = request.form.get('password')
+                if password == WEB_PASSWORD:
+                    session['authenticated'] = True
+                    return redirect(url_for('index'))
+                else:
+                    return render_template('login.html', error="Invalid password")
+            return render_template('login.html')
+
+        @app.route('/logout')
+        def logout():
+            session.pop('authenticated', None)
+            return redirect(url_for('login'))
 
         @app.route('/')
+        @login_required
         def index():
             return render_template('index.html', cameras=self.cameras)
 
+        @app.route('/playback')
+        @login_required
+        def playback():
+            videos = self.video_playback.get_video_files()
+            return render_template('playback.html', videos=videos)
+
         @app.route('/video_feed/<camera_id>')
+        @login_required
         def video_feed(camera_id):
             camera = self.cameras.get(camera_id)
             if not camera or not camera.running: # Check if camera is running
                 return "Camera not found or not active", 404
             return Response(camera.generate_mjpeg_frames(),
                             mimetype='multipart/x-mixed-replace; boundary=frame')
+
+        @app.route('/playback_feed')
+        @login_required
+        def playback_feed():
+            return Response(self.video_playback.generate_mjpeg_frames(),
+                            mimetype='multipart/x-mixed-replace; boundary=frame')
+
+        @app.route('/api/videos')
+        @login_required
+        def api_videos():
+            videos = self.video_playback.get_video_files()
+            return jsonify(videos)
+
+        @app.route('/api/play_video', methods=['POST'])
+        @login_required
+        def api_play_video():
+            data = request.get_json()
+            video_path = data.get('video_path')
+            
+            if not video_path or not os.path.exists(video_path):
+                return jsonify({'success': False, 'error': 'Video file not found'})
+            
+            # Security check: ensure video path is within our save directory
+            if not os.path.abspath(video_path).startswith(os.path.abspath(self.video_playback.save_path)):
+                return jsonify({'success': False, 'error': 'Invalid video path'})
+            
+            print(f"Attempting to load and play video: {video_path}")
+            
+            # Stop any current playback first
+            self.video_playback.stop_playback()
+            time.sleep(0.1)  # Brief pause to ensure cleanup
+            
+            # Load the video
+            if not self.video_playback.load_video(video_path):
+                return jsonify({'success': False, 'error': 'Failed to load video file'})
+            
+            # Start playback
+            if not self.video_playback.start_playback():
+                return jsonify({'success': False, 'error': 'Failed to start video playback'})
+            
+            print(f"Successfully started playback of {os.path.basename(video_path)}")
+            return jsonify({'success': True})
+            
+        @app.route('/api/stop_playback', methods=['POST'])
+        @login_required
+        def api_stop_playback():
+            self.video_playback.stop_playback()
+            return jsonify({'success': True})
+
+        @app.route('/api/playback_info')
+        @login_required
+        def api_playback_info():
+            return jsonify(self.video_playback.get_playback_info())
+
+        @app.route('/download_video/<path:video_path>')
+        @login_required
+        def download_video(video_path):
+            # Security check: ensure video path is within our save directory
+            full_path = os.path.join(self.video_playback.save_path, video_path)
+            if not os.path.exists(full_path) or not os.path.abspath(full_path).startswith(os.path.abspath(self.video_playback.save_path)):
+                return "Video file not found", 404
+            
+            return send_file(full_path, as_attachment=True, download_name=os.path.basename(full_path))
         
         import logging
         log = logging.getLogger('werkzeug')
@@ -1242,6 +1619,10 @@ class MultiCameraInspector:
         print("\nInitiating graceful shutdown...")
         self.running = False # Signal all threads to stop
 
+        # Stop video playback
+        if self.video_playback:
+            self.video_playback.stop_playback()
+
         # Stop the video recorder BEFORE cameras to ensure all frames are processed and writers are released.
         if self.video_recorder:
             self.video_recorder.stop()
@@ -1265,9 +1646,6 @@ class MultiCameraInspector:
         print("All components gracefully stopped and resources released.")
 
 
-
-
-
 def main():
     parser = argparse.ArgumentParser(description="Multi-Camera Inspector for Jetson Nano with Flask web interface.")
     parser.add_argument('--cameras', nargs='+', help="Specific camera IDs/names to use (e.g., camera_lr video0). If omitted, all detected cameras will be used.")
@@ -1287,13 +1665,34 @@ def main():
     inspector.run_inspection()
 
 if __name__ == "__main__":
-    html_template = """
+    # Create HTML templates
+    html_index_template = """
     <!DOCTYPE html>
     <html>
     <head>
         <title>Multi-Camera Inspector</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
+            body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+            .header {
+                background-color: #333;
+                color: white;
+                padding: 15px;
+                margin: -20px -20px 20px -20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .nav-links a {
+                color: white;
+                text-decoration: none;
+                margin-left: 20px;
+                padding: 8px 16px;
+                background-color: #555;
+                border-radius: 4px;
+            }
+            .nav-links a:hover {
+                background-color: #777;
+            }
             .camera-container {
                 display: flex;
                 flex-wrap: wrap;
@@ -1302,47 +1701,432 @@ if __name__ == "__main__":
             }
             .camera-card {
                 border: 1px solid #ccc;
-                padding: 10px;
+                padding: 15px;
                 box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
                 border-radius: 8px;
-                background-color: #f9f9f9;
+                background-color: white;
                 text-align: center;
+                min-width: 320px;
             }
             .camera-card h2 {
                 margin-top: 0;
                 color: #333;
+                border-bottom: 2px solid #007bff;
+                padding-bottom: 10px;
             }
             .camera-card img {
                 max-width: 100%;
                 height: auto;
-                border: 1px solid #eee;
+                border: 2px solid #eee;
                 border-radius: 4px;
+                margin-top: 10px;
+            }
+            .status {
+                color: #28a745;
+                font-weight: bold;
                 margin-top: 10px;
             }
         </style>
     </head>
     <body>
-        <h1>Multi-Camera Inspector</h1>
+        <div class="header">
+            <h1>Multi-Camera Inspector - Live Feeds</h1>
+            <div class="nav-links">
+                <a href="/">Live Feeds</a>
+                <a href="/playback">Video Playback</a>
+                <a href="/logout">Logout</a>
+            </div>
+        </div>
+        
         <div class="camera-container">
             {% for cam_id, camera in cameras.items() %}
             <div class="camera-card">
                 <h2>{{ camera.camera_name }} ({{ cam_id }})</h2>
                 <img src="{{ url_for('video_feed', camera_id=cam_id) }}" width="640" height="480" alt="Video Feed">
-                <p>Status: Live</p>
+                <div class="status">Status: Live Recording</div>
             </div>
             {% endfor %}
         </div>
         {% if not cameras %}
-        <p>No cameras are currently active or detected.</p>
+        <div style="text-align: center; margin-top: 50px;">
+            <h2>No cameras are currently active or detected.</h2>
+        </div>
         {% endif %}
     </body>
     </html>
     """
+    html_playback_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Video Playback - Multi-Camera Inspector</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+            .header {
+                background-color: #333;
+                color: white;
+                padding: 15px;
+                margin: -20px -20px 20px -20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .nav-links a {
+                color: white;
+                text-decoration: none;
+                margin-left: 20px;
+                padding: 8px 16px;
+                background-color: #555;
+                border-radius: 4px;
+            }
+            .nav-links a:hover {
+                background-color: #777;
+            }
+            .playback-container {
+                display: flex;
+                gap: 20px;
+                margin-top: 20px;
+            }
+            .video-player {
+                flex: 1;
+                background-color: white;
+                border-radius: 8px;
+                padding: 20px;
+                box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
+            }
+            .video-list {
+                width: 400px;
+                background-color: white;
+                border-radius: 8px;
+                padding: 20px;
+                box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
+                max-height: 600px;
+                overflow-y: auto;
+            }
+            .video-feed {
+                width: 100%;
+                max-width: 800px;
+                height: 600px;
+                border: 2px solid #eee;
+                border-radius: 4px;
+                margin-bottom: 20px;
+            }
+            .controls {
+                text-align: center;
+                margin: 20px 0;
+            }
+            .btn {
+                background-color: #007bff;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                margin: 0 5px;
+            }
+            .btn:hover {
+                background-color: #0056b3;
+            }
+            .btn-danger {
+                background-color: #dc3545;
+            }
+            .btn-danger:hover {
+                background-color: #c82333;
+            }
+            .camera-section {
+                margin-bottom: 30px;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                overflow: hidden;
+            }
+            .camera-header {
+                background-color: #007bff;
+                color: white;
+                padding: 15px;
+                font-weight: bold;
+            }
+            .video-item {
+                padding: 10px;
+                border-bottom: 1px solid #eee;
+                cursor: pointer;
+                transition: background-color 0.2s;
+            }
+            .video-item:hover {
+                background-color: #f8f9fa;
+            }
+            .video-item:last-child {
+                border-bottom: none;
+            }
+            .video-filename {
+                font-weight: bold;
+                color: #333;
+            }
+            .video-details {
+                font-size: 12px;
+                color: #666;
+                margin-top: 5px;
+            }
+            .playback-info {
+                background-color: #f8f9fa;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 15px;
+                margin-bottom: 20px;
+            }
+            .progress-bar {
+                width: 100%;
+                height: 20px;
+                background-color: #e9ecef;
+                border-radius: 10px;
+                overflow: hidden;
+                margin: 10px 0;
+            }
+            .progress-fill {
+                height: 100%;
+                background-color: #007bff;
+                transition: width 0.3s ease;
+            }
+            .download-btn {
+                background-color: #28a745;
+                font-size: 12px;
+                padding: 5px 10px;
+                margin-left: 10px;
+            }
+            .download-btn:hover {
+                background-color: #218838;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Multi-Camera Inspector - Video Playback</h1>
+            <div class="nav-links">
+                <a href="/">Live Feeds</a>
+                <a href="/playback">Video Playback</a>
+                <a href="/logout">Logout</a>
+            </div>
+        </div>
 
+        <div class="playback-container">
+            <div class="video-player">
+                <h2>Video Player</h2>
+                <img id="videoFeed" class="video-feed" src="/playback_feed" alt="Video Playback">
+                
+                <div class="playback-info" id="playbackInfo">
+                    <strong>No video selected</strong>
+                </div>
+                
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+                
+                <div class="controls">
+                    <button class="btn btn-danger" onclick="stopPlayback()">Stop Playback</button>
+                    <button class="btn" onclick="refreshVideoList()">Refresh Video List</button>
+                </div>
+            </div>
+
+            <div class="video-list">
+                <h2>Available Videos</h2>
+                <div id="videoListContainer">
+                    {% for camera_name, video_files in videos.items() %}
+                    <div class="camera-section">
+                        <div class="camera-header">{{ camera_name }}</div>
+                        {% for video in video_files %}
+                        <div class="video-item" onclick="playVideo('{{ video.path }}')">
+                            <div class="video-filename">{{ video.filename }}</div>
+                            <div class="video-details">
+                                {{ video.timestamp.strftime('%Y-%m-%d %H:%M:%S') }} | {{ video.size_mb }} MB
+                                {% if video.metadata.duration_minutes %}
+                                | {{ "%.1f"|format(video.metadata.duration_minutes) }} min
+                                {% endif %}
+                                <button class="btn download-btn" onclick="event.stopPropagation(); downloadVideo('{{ camera_name }}/{{ video.filename }}')">Download</button>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if not videos %}
+                <p>No video files found in {{ VIDEO_SAVE_PATH }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <script>
+            function playVideo(videoPath) {
+                fetch('/api/play_video', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({video_path: videoPath})
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('Video playback started');
+                        updatePlaybackInfo();
+                    } else {
+                        alert('Failed to start video: ' + (data.error || 'Unknown error'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error starting video playback');
+                });
+            }
+
+            function stopPlayback() {
+                fetch('/api/stop_playback', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('Playback stopped');
+                        updatePlaybackInfo();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                });
+            }
+
+            function downloadVideo(videoPath) {
+                window.open('/download_video/' + videoPath, '_blank');
+            }
+
+            function refreshVideoList() {
+                location.reload();
+            }
+
+            function updatePlaybackInfo() {
+                fetch('/api/playback_info')
+                .then(response => response.json())
+                .then(data => {
+                    const infoDiv = document.getElementById('playbackInfo');
+                    const progressFill = document.getElementById('progressFill');
+                    
+                    if (data.current_video && data.playing) {
+                        infoDiv.innerHTML = `
+                            <strong>Playing:</strong> ${data.current_video}<br>
+                            <strong>Frame:</strong> ${data.current_frame} / ${data.total_frames}<br>
+                            <strong>FPS:</strong> ${data.fps.toFixed(1)}
+                        `;
+                        progressFill.style.width = data.progress_percent.toFixed(1) + '%';
+                    } else if (data.current_video) {
+                        infoDiv.innerHTML = `<strong>Loaded:</strong> ${data.current_video} (stopped)`;
+                        progressFill.style.width = '0%';
+                    } else {
+                        infoDiv.innerHTML = '<strong>No video selected</strong>';
+                        progressFill.style.width = '0%';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error updating playback info:', error);
+                });
+            }
+
+            // Update playback info every second
+            setInterval(updatePlaybackInfo, 1000);
+            
+            // Initial update
+            updatePlaybackInfo();
+        </script>
+    </body>
+    </html>
+    """
+
+    html_login_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Login - Multi-Camera Inspector</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f5f5f5;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+            }
+            .login-container {
+                background-color: white;
+                padding: 40px;
+                border-radius: 8px;
+                box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
+                width: 300px;
+                text-align: center;
+            }
+            h1 {
+                color: #333;
+                margin-bottom: 30px;
+            }
+            input[type="password"] {
+                width: 100%;
+                padding: 12px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 16px;
+                margin-bottom: 20px;
+                box-sizing: border-box;
+            }
+            .btn {
+                background-color: #007bff;
+                color: white;
+                padding: 12px 24px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 16px;
+                width: 100%;
+            }
+            .btn:hover {
+                background-color: #0056b3;
+            }
+            .error {
+                color: #dc3545;
+                margin-top: 15px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="login-container">
+            <h1>Camera Inspector</h1>
+            <form method="post">
+                <input type="password" name="password" placeholder="Enter password" required>
+                <button type="submit" class="btn">Login</button>
+                {% if error %}
+                <div class="error">{{ error }}</div>
+                {% endif %}
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+    
     template_dir = 'templates'
     os.makedirs(template_dir, exist_ok=True)
 
+    # Write all template files
     with open(os.path.join(template_dir, 'index.html'), 'w') as f:
-        f.write(html_template)
+        f.write(html_index_template)
+    
+    with open(os.path.join(template_dir, 'playback.html'), 'w') as f:
+        f.write(html_playback_template)
+    
+    with open(os.path.join(template_dir, 'login.html'), 'w') as f:
+        f.write(html_login_template)
+    
+    # Check for password configuration
+    if WEB_PASSWORD is None:
+        print("WARNING: No WEB_PASSWORD environment variable set. Web interface will be unprotected!")
+        print("Set WEB_PASSWORD environment variable to enable authentication.")
+        print("Example: export WEB_PASSWORD='your_secure_password'")
+    else:
+        print("Password protection enabled for web interface.")
     
     main()

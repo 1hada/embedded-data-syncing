@@ -4,7 +4,27 @@
     <head>
         <title>Multi-Camera Inspector</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
+            body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+            .header {
+                background-color: #333;
+                color: white;
+                padding: 15px;
+                margin: -20px -20px 20px -20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .nav-links a {
+                color: white;
+                text-decoration: none;
+                margin-left: 20px;
+                padding: 8px 16px;
+                background-color: #555;
+                border-radius: 4px;
+            }
+            .nav-links a:hover {
+                background-color: #777;
+            }
             .camera-container {
                 display: flex;
                 flex-wrap: wrap;
@@ -13,38 +33,56 @@
             }
             .camera-card {
                 border: 1px solid #ccc;
-                padding: 10px;
+                padding: 15px;
                 box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
                 border-radius: 8px;
-                background-color: #f9f9f9;
+                background-color: white;
                 text-align: center;
+                min-width: 320px;
             }
             .camera-card h2 {
                 margin-top: 0;
                 color: #333;
+                border-bottom: 2px solid #007bff;
+                padding-bottom: 10px;
             }
             .camera-card img {
                 max-width: 100%;
                 height: auto;
-                border: 1px solid #eee;
+                border: 2px solid #eee;
                 border-radius: 4px;
+                margin-top: 10px;
+            }
+            .status {
+                color: #28a745;
+                font-weight: bold;
                 margin-top: 10px;
             }
         </style>
     </head>
     <body>
-        <h1>Multi-Camera Inspector</h1>
+        <div class="header">
+            <h1>Multi-Camera Inspector - Live Feeds</h1>
+            <div class="nav-links">
+                <a href="/">Live Feeds</a>
+                <a href="/playback">Video Playback</a>
+                <a href="/logout">Logout</a>
+            </div>
+        </div>
+        
         <div class="camera-container">
             {% for cam_id, camera in cameras.items() %}
             <div class="camera-card">
                 <h2>{{ camera.camera_name }} ({{ cam_id }})</h2>
                 <img src="{{ url_for('video_feed', camera_id=cam_id) }}" width="640" height="480" alt="Video Feed">
-                <p>Status: Live</p>
-                </div>
+                <div class="status">Status: Live Recording</div>
+            </div>
             {% endfor %}
         </div>
         {% if not cameras %}
-        <p>No cameras are currently active or detected.</p>
+        <div style="text-align: center; margin-top: 50px;">
+            <h2>No cameras are currently active or detected.</h2>
+        </div>
         {% endif %}
     </body>
     </html>
