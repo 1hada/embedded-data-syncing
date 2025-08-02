@@ -1,3 +1,5 @@
+# Main setup 
+- https://github.com/Qengineering/Jetson-Nano-Ubuntu-20-image?tab=readme-ov-file
 
 ## Key Features:
 
@@ -110,14 +112,4 @@ sudo vim /etc/gdm3/custom.conf
 sudo vim /etc/X11/xorg.conf
 sudo vim /etc/update-manager/release-upgrades
 sudo reboot
-```
-
-
-# Set up video saving partition
-```
-# List all block devices and their partitions
-lsblk
-
-# List partition tables (more detailed, requires sudo)
-sudo fdisk -l
 ```

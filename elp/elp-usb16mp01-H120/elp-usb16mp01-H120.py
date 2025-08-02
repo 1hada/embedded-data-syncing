@@ -26,20 +26,22 @@ import sys
 import json # For metadata JSON files
 import shutil # For disk usage
 import atexit # For graceful shutdown
+from datetime import datetime, timedelta, timezone
+
 
 # Flask imports for web server
 from flask import Flask, Response, render_template
 
 # --- Configuration Constants ---
-ADJUSTMENT_INTERVAL = 0.5  # Seconds between image adjustments
+ADJUSTMENT_INTERVAL = 1.0  # Seconds between image adjustments
 BRIGHTNESS_TARGET_LOW = 80 # Target average pixel value for "not too dark"
 BRIGHTNESS_TARGET_HIGH = 120 # Target average pixel value for "not too bright"
 ADJUSTMENT_STEP_EXPOSURE = 50 # Base amount to change exposure by
-ADJUSTMENT_STEP_BRIGHTNESS = 10 # Base amount to change brightness by
-ADJUSTMENT_STEP_CONTRAST = 10 # Base amount to change contrast by
-ADJUSTMENT_STEP_GAIN = 5 # Base amount to change gain by
+ADJUSTMENT_STEP_BRIGHTNESS = 4 # Base amount to change brightness by
+ADJUSTMENT_STEP_CONTRAST = 2 # Base amount to change contrast by
+ADJUSTMENT_STEP_GAIN = 10 # Base amount to change gain by
 
-BRIGHTNESS_DEVIATION_SCALE = 0.1 # Adjust this value: higher means more aggressive scaling
+BRIGHTNESS_DEVIATION_SCALE = 0.5 # Adjust this value: higher means more aggressive scaling
 
 # --- Video Recording Constants ---
 VIDEO_SAVE_PATH = './video_streams' # <<< IMPORTANT: Ensure this directory exists and is writable
@@ -492,9 +494,9 @@ def adjust_image_settings(camera: CameraInspector, current_brightness: float):
     if current_brightness < BRIGHTNESS_TARGET_LOW:
         deviation = BRIGHTNESS_TARGET_LOW - current_brightness
         # FOR TESTING dynamic_step_exposure = max(ADJUSTMENT_STEP_EXPOSURE, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_EXPOSURE / 50)))
-        dynamic_step_brightness = max(ADJUSTMENT_STEP_BRIGHTNESS, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_BRIGHTNESS / 10)))
-        dynamic_step_contrast = max(ADJUSTMENT_STEP_CONTRAST, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_CONTRAST / 10)))
-        dynamic_step_gain = max(ADJUSTMENT_STEP_GAIN, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_GAIN / 5)))
+        dynamic_step_brightness = max(ADJUSTMENT_STEP_BRIGHTNESS, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_BRIGHTNESS)))
+        dynamic_step_contrast = max(ADJUSTMENT_STEP_CONTRAST, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_CONTRAST)))
+        dynamic_step_gain = max(ADJUSTMENT_STEP_GAIN, int(deviation * BRIGHTNESS_DEVIATION_SCALE * (ADJUSTMENT_STEP_GAIN)))
         """
         if current_exposure is not None and current_exposure < exposure_max:
             new_exposure = min(current_exposure + dynamic_step_exposure, exposure_max)
@@ -573,9 +575,9 @@ class VideoRecorder:
         self.disk_monitor_thread = None
         self.writer_locks = {}
 
-        # Add a flag to indicate if a clip switch is in progress for a camera
-        self.clip_switching_in_progress = {} # New: To signal recorder threads about switch
+        self.clip_switching_in_progress = {}
 
+        # The initial save_path directory is created, camera-specific subdirectories will be created later.
         os.makedirs(self.save_path, exist_ok=True)
         print(f"Video clips will be saved to: {self.save_path}")
         print(f"Clip duration: {clip_duration_minutes} minutes.")
@@ -591,9 +593,14 @@ class VideoRecorder:
         # This function should only be called when the writer_lock is already held
         # for this specific camera.
         timestamp_start = datetime.now()
+
+        # Create camera-specific subdirectory
+        camera_save_dir = os.path.join(self.save_path, camera_name)
+        os.makedirs(camera_save_dir, exist_ok=True) # Ensure the camera's directory exists
+
         filename_base = timestamp_start.strftime(f"{camera_name}_%Y%m%d_%H%M%S_%f")[:-3]
-        video_filepath = os.path.join(self.save_path, f"{filename_base}.avi")
-        metadata_filepath = os.path.join(self.save_path, f"{filename_base}.json")
+        video_filepath = os.path.join(camera_save_dir, f"{filename_base}.avi") # Save in camera's directory
+        metadata_filepath = os.path.join(camera_save_dir, f"{filename_base}.json") # Save metadata there too
 
         current_settings = self._get_current_camera_settings(camera_name)
 
@@ -621,7 +628,7 @@ class VideoRecorder:
                 metadata_filepath,
                 camera_name,
                 timestamp_start,
-                None, # End time will be filled upon clip closing
+                None,
                 self.clip_duration.total_seconds() / 60,
                 current_fps,
                 f"{width}x{height}",
@@ -648,14 +655,14 @@ class VideoRecorder:
 
                     # Update metadata for the just-closed clip
                     if current_start_time:
+                        camera_save_dir = os.path.join(self.save_path, camera_name) # Ensure correct path for metadata
                         filename_base = current_start_time.strftime(f"{camera_name}_%Y%m%d_%H%M%S_%f")[:-3]
-                        metadata_filepath = os.path.join(self.save_path, f"{filename_base}.json")
-                        # Re-read existing metadata to update end_time and actual duration
+                        metadata_filepath = os.path.join(camera_save_dir, f"{filename_base}.json")
                         try:
                             with open(metadata_filepath, 'r') as f:
                                 metadata = json.load(f)
                         except (FileNotFoundError, json.JSONDecodeError):
-                            metadata = {} # Fallback if metadata isn't found/corrupt
+                            metadata = {}
 
                         end_time = datetime.now()
                         duration = (end_time - current_start_time).total_seconds() / 60
@@ -668,7 +675,6 @@ class VideoRecorder:
                                 json.dump(metadata, f, indent=4)
                         except Exception as e:
                             print(f"ERROR: Could not update metadata for {metadata_filepath}: {e}")
-
 
                     current_writer.release()
                     print(f"[{camera_name}] Video writer released (during switch).")
@@ -687,86 +693,105 @@ class VideoRecorder:
 
 
     def _write_frame_thread_func(self, camera_name):
-        # Ensure a lock exists for this camera's writer operations
         if camera_name not in self.writer_locks:
             self.writer_locks[camera_name] = threading.Lock()
         
-        # Initialize the flag for this camera
         self.clip_switching_in_progress[camera_name] = False
 
-        # Initial writer opening
-        # This needs to be done under the lock to prevent race conditions during first open
         with self.writer_locks[camera_name]:
             self._open_or_continue_writer(camera_name)
 
         while self.running:
             try:
-                frame_data = self.frame_queues[camera_name].get(timeout=0.1) # Shorter timeout
-                frame, frame_time, current_fps = frame_data
+                frame_data = self.frame_queues[camera_name].get(timeout=0.1)
+                frame, frame_time, current_fps = frame_data # frame_time is the original capture timestamp
 
-                # Check if a switch is needed *before* trying to write
+                # --- Draw UTC timestamp on the frame ---
+                # Ensure the frame is writable if it's not (e.g., if it's a read-only NumPy array view)
+                if not frame.flags['WRITEABLE']:
+                    frame = frame.copy() # Make a writable copy if needed
+
+                utc_now = datetime.now(timezone.utc)
+                timestamp_str = utc_now.strftime("%Y-%m-%d %H:%M:%S.%f UTC")[:-3] # Milliseconds up to 3 digits
+
+                # Define text properties (adjust as needed for visibility)
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.7
+                font_thickness = 2
+                text_color = (0, 255, 0) # Green BGR
+                text_color_bg = (0, 0, 0) # Black BGR for background rectangle
+
+                # Get text size
+                (text_width, text_height), baseline = cv2.getTextSize(timestamp_str, font, font_scale, font_thickness)
+                
+                # Position text: bottom-left corner with some padding
+                text_offset_x = 10
+                text_offset_y = frame.shape[0] - 10 # 10 pixels from bottom
+                
+                # Draw a filled rectangle as a background for better visibility
+                # Add some padding around the text
+                padding = 5
+                rect_start_x = text_offset_x - padding
+                rect_start_y = text_offset_y - text_height - baseline - padding
+                rect_end_x = text_offset_x + text_width + padding
+                rect_end_y = text_offset_y + padding
+                
+                cv2.rectangle(frame, (rect_start_x, rect_start_y), (rect_end_x, rect_end_y), text_color_bg, -1)
+                
+                # Put the text on the frame
+                cv2.putText(frame, timestamp_str, (text_offset_x, text_offset_y - baseline),
+                            font, font_scale, text_color, font_thickness, cv2.LINE_AA)
+                # --- End timestamp drawing ---
+
                 start_time = self.clip_start_times.get(camera_name)
                 writer = self.writers.get(camera_name)
 
                 if start_time and (datetime.now() - start_time) > self.clip_duration and not self.clip_switching_in_progress[camera_name]:
                     print(f"[{camera_name}] Clip duration exceeded ({self.clip_duration.total_seconds()/60:.1f} min). Initiating clip switch.")
                     self.clip_switching_in_progress[camera_name] = True
-                    # Do the actual switch in a new thread to avoid blocking the frame processing
                     switch_thread = threading.Thread(target=self._close_and_open_new_clip, args=(camera_name,))
-                    switch_thread.daemon = True # Allow program to exit even if this thread is running
+                    switch_thread.daemon = True
                     switch_thread.start()
-                    # The main writer loop will continue consuming frames, but might drop if writer isn't ready.
-                    # This is better than stalling the queue entirely.
-                    # We continue to the next iteration without writing the current frame if a switch is initiated,
-                    # as the writer might be closing.
 
-                # Only attempt to write frame if writer is open AND not currently switching (or just finished switching)
                 if writer and writer.isOpened() and not self.clip_switching_in_progress[camera_name]:
                     try:
                         writer.write(frame)
                     except Exception as write_err:
                         print(f"[{camera_name}] ERROR writing frame: {write_err}. Marking for switch.")
-                        self.clip_switching_in_progress[camera_name] = True # Mark for switch on write error
+                        self.clip_switching_in_progress[camera_name] = True
                         switch_thread = threading.Thread(target=self._close_and_open_new_clip, args=(camera_name,))
                         switch_thread.daemon = True
                         switch_thread.start()
                 elif self.clip_switching_in_progress[camera_name]:
-                    # If switching, just drop the frame but don't warn about full queue from here.
-                    # The `write_frame` method will handle `queue.Full` warnings.
-                    pass
+                    pass # Dropping frame because a switch is in progress
                 else:
-                    # Writer not open and not currently switching. This is an error.
                     print(f"[{camera_name}] ERROR: Writer is not open outside of switch. Dropping frame. Attempting re-open.")
-                    self.clip_switching_in_progress[camera_name] = True # Mark for switch on unexpected close
+                    self.clip_switching_in_progress[camera_name] = True
                     switch_thread = threading.Thread(target=self._close_and_open_new_clip, args=(camera_name,))
                     switch_thread.daemon = True
                     switch_thread.start()
 
-
                 self.frame_queues[camera_name].task_done()
             except queue.Empty:
-                # If the queue is empty, and a switch was initiated, check if it's done
                 if self.clip_switching_in_progress.get(camera_name, False):
-                    # Check if writer is available again (meaning switch finished)
                     if self.writers.get(camera_name) and self.writers[camera_name].isOpened():
                         print(f"[{camera_name}] Clip switch appears complete while queue was empty.")
                         self.clip_switching_in_progress[camera_name] = False
                 continue
             except Exception as e:
                 print(f"ERROR in {camera_name} writer thread: {e}")
-                time.sleep(0.1) # Small delay to prevent busy-waiting on repeated errors
+                time.sleep(0.1)
 
     def write_frame(self, camera_name, frame, timestamp, current_fps):
         if not self.running:
             return
 
         if camera_name not in self.frame_queues:
-            # Initialize lock and switch flag for this camera if not already present
             if camera_name not in self.writer_locks:
                 self.writer_locks[camera_name] = threading.Lock()
-                self.clip_switching_in_progress[camera_name] = False # Initialize for new camera
+                self.clip_switching_in_progress[camera_name] = False
 
-            self.frame_queues[camera_name] = queue.Queue(maxsize=120) # Increased queue size significantly
+            self.frame_queues[camera_name] = queue.Queue(maxsize=120)
             t = threading.Thread(target=self._write_frame_thread_func, args=(camera_name,))
             t.daemon = True
             t.start()
@@ -774,13 +799,10 @@ class VideoRecorder:
             print(f"[{camera_name}] Recorder thread started for video writing.")
 
         try:
+            # We pass the original `timestamp` (capture time) along with the frame.
+            # The UTC timestamp for drawing will be generated *just before* writing the frame.
             self.frame_queues[camera_name].put_nowait((frame, timestamp, current_fps))
         except queue.Full:
-            # Only warn if not in the middle of a planned switch, otherwise it's expected
-            # if self.clip_switching_in_progress.get(camera_name, False):
-            #     # Frame dropped due to switch, no need for critical warning
-            #     pass
-            # else:
             print(f"WARNING: Recorder queue full for {camera_name}. Dropping frame. (Writer stuck or too slow?)")
 
     def close_writer(self, camera_name):
@@ -790,10 +812,10 @@ class VideoRecorder:
                     current_writer = self.writers[camera_name]
                     current_start_time = self.clip_start_times.get(camera_name)
 
-                    # Update metadata for the just-closed clip during normal stop
                     if current_start_time:
+                        camera_save_dir = os.path.join(self.save_path, camera_name) # Ensure correct path for metadata
                         filename_base = current_start_time.strftime(f"{camera_name}_%Y%m%d_%H%M%S_%f")[:-3]
-                        metadata_filepath = os.path.join(self.save_path, f"{filename_base}.json")
+                        metadata_filepath = os.path.join(camera_save_dir, f"{filename_base}.json")
                         try:
                             with open(metadata_filepath, 'r') as f:
                                 metadata = json.load(f)
@@ -858,6 +880,7 @@ class VideoRecorder:
     def _monitor_disk_space(self):
         while self.running:
             try:
+                # The directory size check still applies to the base save_path
                 dir_size_bytes = self._get_directory_size_bytes(self.save_path)
                 dir_size_gb = dir_size_bytes / (1024**3)
 
@@ -870,17 +893,23 @@ class VideoRecorder:
             time.sleep(self.disk_check_interval)
 
     def _clean_oldest_files(self, target_bytes):
-        all_video_files = sorted(glob.glob(os.path.join(self.save_path, '*.avi')))
+        # This function needs to consider files within camera subdirectories
+        # Use os.path.join(self.save_path, '**', '*.avi') to search recursively
+        all_video_files = sorted(glob.glob(os.path.join(self.save_path, '**', '*.avi'), recursive=True))
         files_to_delete = []
 
         for video_file in all_video_files:
             try:
+                # Extract filename base from the full path
                 filename_base = os.path.basename(video_file).rsplit('.', 1)[0]
                 parts = filename_base.split('_')
                 if len(parts) >= 3:
                     dt_string = f"{parts[-2]}_{parts[-1][:6]}"
                     dt_object = datetime.strptime(dt_string, "%Y%m%d_%H%M%S")
-                    metadata_file = os.path.join(self.save_path, f"{filename_base}.json")
+                    
+                    # Construct metadata file path correctly based on the video_file's directory
+                    video_dir = os.path.dirname(video_file)
+                    metadata_file = os.path.join(video_dir, f"{filename_base}.json")
                     files_to_delete.append((dt_object, video_file, metadata_file))
                 else:
                     print(f"Warning: Filename does not match expected format for timestamp parsing: {video_file}. Skipping.")
@@ -888,7 +917,6 @@ class VideoRecorder:
                 print(f"Warning: Could not parse timestamp from filename {video_file} due to format error: {ve}. Skipping.")
             except Exception as e:
                 print(f"Warning: An unexpected error occurred while processing {video_file}: {e}. Skipping.")
-
 
         files_to_delete.sort(key=lambda x: x[0])
 
@@ -918,9 +946,9 @@ class VideoRecorder:
         self.running = True
         self.camera_inspectors = camera_inspectors
         for cam_id, cam_obj in self.camera_inspectors.items():
-            cam_name = cam_obj.camera_name # Get camera_name from the object
+            cam_name = cam_obj.camera_name
             self.writer_locks[cam_name] = threading.Lock()
-            self.clip_switching_in_progress[cam_name] = False # Initialize the flag
+            self.clip_switching_in_progress[cam_name] = False
 
         self.disk_monitor_thread = threading.Thread(target=self._monitor_disk_space)
         self.disk_monitor_thread.daemon = True
@@ -948,7 +976,6 @@ class VideoRecorder:
                 print("Warning: Disk monitor thread did not terminate cleanly.")
 
         print("Video recorder stopped.")
-
 
 
 
@@ -1236,6 +1263,10 @@ class MultiCameraInspector:
                 print("Warning: Adjustment thread did not terminate cleanly.")
         
         print("All components gracefully stopped and resources released.")
+
+
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-Camera Inspector for Jetson Nano with Flask web interface.")
